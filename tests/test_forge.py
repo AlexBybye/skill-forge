@@ -82,6 +82,7 @@ def run_fixture(
     configuration: str,
     skill_root: Path | None,
     allowed: list[str] | None = None,
+    track: str = "visible",
 ) -> Path:
     return run_module.execute(
         argparse.Namespace(
@@ -95,6 +96,58 @@ def run_fixture(
             executable=None,
             timeout_seconds=30,
             allow_validator=allowed or [],
+            track=track,
+        )
+    )
+
+
+# A stub that satisfies the Codex probe, then fails the turn exactly the way a
+# real network interruption does. Used to prove transport failure is never
+# scored as candidate evidence.
+FAKE_CODEX = """#!/usr/bin/env python3
+import sys
+argv = sys.argv[1:]
+if "--version" in argv:
+    print("codex-stub 0.0.0")
+    raise SystemExit(0)
+if "--help" in argv:
+    print("exec --json --ephemeral --sandbox --output-last-message")
+    raise SystemExit(0)
+sys.stdin.read()
+print('{"type":"thread.started","thread_id":"stub"}')
+print('{"type":"error","message":"stream disconnected before completion"}')
+print('{"type":"turn.failed","error":{"message":"stream disconnected"}}')
+raise SystemExit(%d)
+"""
+
+
+def make_fake_codex(path: Path, exit_code: int) -> Path:
+    path.write_text(FAKE_CODEX % exit_code, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def run_live(
+    suite: Path,
+    runs_dir: Path,
+    skill_root: Path,
+    executable: Path,
+    host: str = "codex",
+    policy: str = "workspace-write",
+) -> Path:
+    return run_module.execute(
+        argparse.Namespace(
+            suite=suite,
+            configuration="candidate",
+            skill_root=skill_root,
+            host=host,
+            policy=policy,
+            runs_dir=runs_dir,
+            model=None,
+            executable=str(executable),
+            timeout_seconds=30,
+            allow_validator=[],
+            track="visible",
         )
     )
 
@@ -193,7 +246,68 @@ class CheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             skill = make_skill(Path(temporary) / "test-skill", name="wrong-name")
             report = check_module.inspect_skill(skill)
-            self.assertIn("frontmatter.name must match the Skill directory name", report["errors"])
+            self.assertFalse(report["structural_valid"])
+            self.assertEqual(report["expected_name_source"], "directory")
+
+    def test_isolated_directory_name_is_not_the_identity(self) -> None:
+        """A candidate authored in an isolated directory keeps its own name."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            skill = make_skill(root / "candidate", name="line-sorter")
+            report = check_module.inspect_skill(skill, expected_name="line-sorter")
+            self.assertTrue(report["structural_valid"])
+            self.assertEqual(report["expected_name_source"], "explicit")
+
+    def test_suite_supplies_the_expected_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            skill = make_skill(root / "candidate", name="test-skill")
+            suite = root / "suite.json"
+            write_json(suite, suite_value())
+            fixture_response(root, "candidate")
+            report = check_module.inspect_skill(skill, suite)
+            self.assertTrue(report["structural_valid"])
+            self.assertEqual(report["expected_name_source"], "suite")
+            self.assertEqual(report["expected_name"], "test-skill")
+
+    def test_explicit_name_overrides_the_suite(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            skill = make_skill(root / "candidate", name="renamed-skill")
+            suite = root / "suite.json"
+            write_json(suite, suite_value())
+            fixture_response(root, "candidate")
+            report = check_module.inspect_skill(skill, suite, "renamed-skill")
+            self.assertTrue(report["structural_valid"])
+            self.assertEqual(report["expected_name_source"], "explicit")
+
+    def test_suite_name_mismatch_still_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            skill = make_skill(root / "candidate", name="unrelated-skill")
+            suite = root / "suite.json"
+            write_json(suite, suite_value())
+            fixture_response(root, "candidate")
+            report = check_module.inspect_skill(skill, suite)
+            self.assertFalse(report["structural_valid"])
+            self.assertTrue(
+                any("unrelated-skill" in item for item in report["errors"])
+            )
+
+    def test_shipped_fixtures_pass_their_own_checker(self) -> None:
+        """The checker must accept the candidates this project ships."""
+        for skill_root, suite in (
+            ("create/candidate", "create/suite.json"),
+            ("optimize/baseline", "optimize/suite.json"),
+            ("optimize/candidate", "optimize/suite.json"),
+        ):
+            with self.subTest(skill_root=skill_root):
+                report = check_module.inspect_skill(
+                    SKILL_ROOT / "fixtures" / skill_root,
+                    SKILL_ROOT / "fixtures" / suite,
+                )
+                self.assertEqual(report["errors"], [])
+                self.assertTrue(report["structural_valid"])
 
     def test_todo_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -353,6 +467,268 @@ class RunnerTests(unittest.TestCase):
         )
         record = json.loads((run_dir / "results.jsonl").read_text(encoding="utf-8"))
         self.assertEqual(record["status"], "integrity_error")
+
+
+class LiveHostFailureTests(unittest.TestCase):
+    """A host transport failure must never become candidate evidence."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.skill = make_skill(self.root / "test-skill")
+        self.suite = self.root / "suite.json"
+        write_json(
+            self.suite,
+            suite_value(
+                cases=[
+                    execution_case(
+                        fixture=None,
+                        expectations=[
+                            {
+                                "kind": "json_equals",
+                                "path": "out.json",
+                                "value": {"ok": True},
+                            }
+                        ],
+                    )
+                ]
+            ),
+        )
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_nonzero_exit_is_infra_error(self) -> None:
+        executable = make_fake_codex(self.root / "fake-codex", 1)
+        run_dir = run_live(self.suite, self.root / "runs", self.skill, executable)
+        record = json.loads((run_dir / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(record["status"], "infra_error")
+
+    def test_turn_failed_with_zero_exit_is_infra_error(self) -> None:
+        executable = make_fake_codex(self.root / "fake-codex", 0)
+        run_dir = run_live(self.suite, self.root / "runs", self.skill, executable)
+        record = json.loads((run_dir / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(record["status"], "infra_error")
+        self.assertIn("codex turn failed", record["reason"])
+
+    def test_transport_failure_scores_inconclusive_not_failed(self) -> None:
+        executable = make_fake_codex(self.root / "fake-codex", 1)
+        run_dir = run_live(self.suite, self.root / "runs", self.skill, executable)
+        report = score_module.build_report(self.suite, [run_dir])
+        self.assertEqual(report["decision"], "inconclusive")
+        self.assertNotIn("candidate_gain_on_selected_cases", report["claims"]["disproven"])
+
+
+class ObservabilityTests(unittest.TestCase):
+    """A live host cannot observe exact stdout, exit status, or routing."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.skill = make_skill(self.root / "test-skill")
+        self.suite = self.root / "suite.json"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _live_report(self, case: dict[str, object]) -> dict[str, object]:
+        write_json(self.suite, suite_value(cases=[case]))
+        executable = self.root / "stub-codex"
+        executable.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "argv = sys.argv[1:]\n"
+            "if '--version' in argv:\n"
+            "    print('codex-stub 0.0.0')\n"
+            "    raise SystemExit(0)\n"
+            "if '--help' in argv:\n"
+            "    print('exec --json --ephemeral --sandbox --output-last-message')\n"
+            "    raise SystemExit(0)\n"
+            "sys.stdin.read()\n"
+            "print('I will now consider the task.')\n"
+            "raise SystemExit(0)\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        run_dir = run_live(self.suite, self.root / "runs", self.skill, executable)
+        return score_module.build_report(self.suite, [run_dir])
+
+    def test_stdout_equals_is_not_run_on_a_live_host(self) -> None:
+        report = self._live_report(execution_case(fixture=None))
+        self.assertEqual(report["cases"][0]["configurations"]["candidate"], "not_run")
+        self.assertTrue(report["unobservable_checks"])
+        self.assertEqual(report["unobservable_checks"][0]["kind"], "stdout_equals")
+
+    def test_stdout_equals_is_objective_on_the_fixture_host(self) -> None:
+        write_json(self.suite, suite_value())
+        fixture_response(self.root, "candidate")
+        run_dir = run_fixture(self.suite, self.root / "runs", "candidate", self.skill)
+        report = score_module.build_report(self.suite, [run_dir])
+        self.assertEqual(report["cases"][0]["configurations"]["candidate"], "passed")
+        self.assertEqual(report["unobservable_checks"], [])
+
+    def test_indicative_check_does_not_decide_the_case(self) -> None:
+        case = execution_case(
+            fixture=None,
+            critical=False,
+            expectations=[
+                {"kind": "stdout_contains", "value": "definitely-absent-token"}
+            ],
+        )
+        report = self._live_report(case)
+        # The text match fails, but it must not fail the case.
+        self.assertEqual(report["cases"][0]["configurations"]["candidate"], "not_run")
+        self.assertTrue(report["indicative_observations"])
+        self.assertEqual(report["indicative_observations"][0]["status"], "failed")
+
+
+def sealed_case(**updates: object) -> dict[str, object]:
+    case: dict[str, object] = {
+        "id": "sealed-core",
+        "source": "synthetic",
+        "plane": "execution",
+        "category": "boundary",
+        "critical": True,
+        "prompt": "Perform the withheld test task.",
+        "fixture": "cases/sealed-core",
+        "expectations": [{"kind": "stdout_equals", "value": "sealed-ok\n"}],
+    }
+    case.update(updates)
+    return case
+
+
+class SealedPairingTests(unittest.TestCase):
+    """A sealed suite must be a disjoint extension of the visible one."""
+
+    def test_shared_case_id_rejected(self) -> None:
+        visible = forge_core.validate_suite(suite_value())
+        sealed = forge_core.validate_suite(suite_value(cases=[execution_case()]))
+        with self.assertRaises(forge_core.ForgeError) as caught:
+            forge_core.validate_sealed_pairing(visible, sealed)
+        self.assertIn("share case ids", str(caught.exception))
+
+    def test_different_skill_rejected(self) -> None:
+        visible = forge_core.validate_suite(suite_value())
+        other = suite_value(cases=[sealed_case()])
+        other["skill"] = "other-skill"
+        with self.assertRaises(forge_core.ForgeError):
+            forge_core.validate_sealed_pairing(
+                visible, forge_core.validate_suite(other)
+            )
+
+    def test_different_mode_rejected(self) -> None:
+        visible = forge_core.validate_suite(suite_value())
+        sealed = forge_core.validate_suite(
+            suite_value(mode="optimize", cases=[sealed_case()])
+        )
+        with self.assertRaises(forge_core.ForgeError):
+            forge_core.validate_sealed_pairing(visible, sealed)
+
+    def test_disjoint_pairing_accepted(self) -> None:
+        visible = forge_core.validate_suite(suite_value())
+        sealed = forge_core.validate_suite(suite_value(cases=[sealed_case()]))
+        forge_core.validate_sealed_pairing(visible, sealed)
+
+
+class SealedTrackTests(unittest.TestCase):
+    """Held-out results cap claims; they never replace the visible decision."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.skill = make_skill(self.root / "test-skill")
+        self.visible = self.root / "suite.json"
+        self.sealed = self.root / "suite.sealed.json"
+        write_json(self.visible, suite_value())
+        write_json(self.sealed, suite_value(cases=[sealed_case()]))
+        fixture_response(self.root, "candidate")
+        self._sealed_response("sealed-ok\n")
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _sealed_response(self, stdout: str) -> None:
+        write_json(
+            self.root / "cases" / "sealed-core" / "response.candidate.json",
+            {
+                "stdout": stdout,
+                "stderr": "",
+                "exit_code": 0,
+                "selected_skill": None,
+                "artifacts": {},
+            },
+        )
+
+    def _report(self) -> dict[str, object]:
+        visible_run = run_fixture(
+            self.visible, self.root / "runs", "candidate", self.skill
+        )
+        sealed_run = run_fixture(
+            self.sealed, self.root / "runs", "candidate", self.skill, track="sealed"
+        )
+        return score_module.build_report(
+            self.visible, [visible_run], self.sealed, [sealed_run]
+        )
+
+    def test_run_records_its_track(self) -> None:
+        run_dir = run_fixture(
+            self.sealed, self.root / "runs", "candidate", self.skill, track="sealed"
+        )
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["track"], "sealed")
+
+    def test_sealed_pass_confirms_and_proves_holdout(self) -> None:
+        self._sealed_response("sealed-ok\n")
+        report = self._report()
+        self.assertEqual(report["decision"], "handoff_candidate")
+        self.assertEqual(report["sealed"]["verdict"], "confirms")
+        self.assertIn(
+            "visible_decision_reproduced_on_held_out_cases",
+            report["claims"]["proven"],
+        )
+
+    def test_sealed_failure_does_not_overturn_the_decision(self) -> None:
+        self._sealed_response("wrong-output\n")
+        report = self._report()
+        # The visible decision stands; the holdout claim is disproven instead.
+        self.assertEqual(report["decision"], "handoff_candidate")
+        self.assertEqual(report["sealed"]["decision"], "reject_candidate")
+        self.assertEqual(report["sealed"]["verdict"], "contradicts")
+        self.assertIn(
+            "visible_decision_reproduced_on_held_out_cases",
+            report["claims"]["disproven"],
+        )
+
+    def test_absent_sealed_suite_leaves_holdout_unverified(self) -> None:
+        visible_run = run_fixture(
+            self.visible, self.root / "runs", "candidate", self.skill
+        )
+        report = score_module.build_report(self.visible, [visible_run])
+        self.assertIsNone(report["sealed"])
+        self.assertIn("behavior_on_held_out_cases", report["claims"]["unverified"])
+        self.assertIn("no_held_out_cases", report["limitations"])
+
+    def test_track_mismatch_rejected(self) -> None:
+        visible_run = run_fixture(
+            self.visible, self.root / "runs", "candidate", self.skill
+        )
+        self._sealed_response("sealed-ok\n")
+        # A visible-track run cannot be supplied as sealed evidence.
+        mislabelled = run_fixture(
+            self.sealed, self.root / "runs", "candidate", self.skill, track="visible"
+        )
+        with self.assertRaises(forge_core.ForgeError) as caught:
+            score_module.build_report(
+                self.visible, [visible_run], self.sealed, [mislabelled]
+            )
+        self.assertIn("track", str(caught.exception))
+
+    def test_sealed_runs_require_a_sealed_suite(self) -> None:
+        visible_run = run_fixture(
+            self.visible, self.root / "runs", "candidate", self.skill
+        )
+        with self.assertRaises(forge_core.ForgeError):
+            score_module.build_report(self.visible, [visible_run], None, [visible_run])
 
 
 class ScorerTests(unittest.TestCase):

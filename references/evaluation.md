@@ -43,9 +43,13 @@ Do not turn criterion count, judge count, or output lines into extra votes.
 
 ## Development and holdout
 
-Keep development examples visible to the authoring loop. A holdout requires separate access control and must remain unseen during authoring and revision. Renaming or moving a development case does not make it unseen.
+Keep development examples visible to the authoring loop. Renaming or moving a development case does not make it unseen.
 
-Enable holdout only when a generalization claim justifies the added machinery. Otherwise state that selected development cases were tested.
+A holdout is a sealed suite that the agent building the candidate never receives. Write the cases in a context separate from the build context, and withhold the file itself; that absence is the whole enforcement mechanism, so there is no access-control contract to bypass. See the sealed-suite rules in [evidence.md](evidence.md).
+
+Enable a holdout when a generalization claim is wanted. Otherwise state that selected development cases were tested and leave `behavior_on_held_out_cases` unverified.
+
+Two agents drawn from the same model share blind spots. A sealed suite prevents the build agent from writing to the test; it does not supply knowledge neither agent has. The user review of proposed cases is the only heterogeneous check.
 
 ## Decision rules
 
@@ -66,5 +70,7 @@ For no-Skill:
 - all critical candidate-free cases pass: `no_skill_supported_for_selected_cases`;
 - a critical case fails: `no_skill_not_supported_for_selected_cases`;
 - required evidence is incomplete: `inconclusive`.
+
+A sealed suite is decided by the same rules on its own cases. Its outcome adjusts the held-out claim and never rewrites the visible decision.
 
 No decision implies installation, release, automatic routing, host activation, long-term stability, or safety.

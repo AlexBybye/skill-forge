@@ -34,6 +34,9 @@ from forge_core import (
 
 MAX_CAPTURE_BYTES = 1_000_000
 CONFIGURATIONS = frozenset({"candidate", "baseline", "no_skill"})
+# A visible suite is given to the agent that builds the candidate. A sealed
+# suite is withheld from it, so sealed results are held out by construction.
+TRACKS = frozenset({"visible", "sealed"})
 HOSTS = frozenset({"fixture", "codex", "claude"})
 POLICIES = frozenset({"read-only", "workspace-write"})
 
@@ -241,6 +244,38 @@ def _render_prompt(case: dict[str, Any], bundle: str | None, policy: str) -> str
     return "\n".join(parts) + "\n"
 
 
+def _host_failure(
+    host: str, exit_code: int | None, transport_stdout: str
+) -> str | None:
+    """Detect a host transport failure, which is never candidate evidence."""
+    if exit_code is None:
+        return "host produced no exit status"
+    if exit_code != 0:
+        return f"host exited {exit_code}"
+    if host == "codex":
+        for line in transport_stdout.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict) and event.get("type") == "turn.failed":
+                error = event.get("error")
+                message = error.get("message") if isinstance(error, dict) else None
+                return f"codex turn failed: {message or 'unknown error'}"
+    elif host == "claude":
+        try:
+            parsed = json.loads(transport_stdout)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict) and parsed.get("is_error") is True:
+            subtype = parsed.get("subtype")
+            return f"claude reported an error: {subtype or 'unknown error'}"
+    return None
+
+
 def _live_host(
     host: str,
     executable: str,
@@ -352,9 +387,10 @@ def _live_host(
                 stdout = parsed["result"]
         except json.JSONDecodeError:
             pass
+    failure = _host_failure(host, completed.returncode, completed.stdout)
     return {
-        "status": "completed",
-        "reason": None,
+        "status": "infra_error" if failure else "completed",
+        "reason": failure,
         "stdout": stdout,
         "stderr": completed.stderr,
         "exit_code": completed.returncode,
@@ -461,6 +497,9 @@ def execute(args: argparse.Namespace) -> Path:
         raise ForgeError("unsupported host or execution policy")
     if args.host == "claude" and args.policy == "workspace-write":
         raise ForgeError("Claude workspace-write is not implemented in v1")
+    track = getattr(args, "track", "visible") or "visible"
+    if track not in TRACKS:
+        raise ForgeError(f"unsupported track: {track}")
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:10]
     runs_dir = args.runs_dir.expanduser().resolve(strict=False)
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -486,6 +525,7 @@ def execute(args: argparse.Namespace) -> Path:
         "status": "running",
         "started_at": _utc_now(),
         "suite_digest": digest_json(suite),
+        "track": track,
         "configuration": configuration,
         "skill_digest": skill_digest,
         "host": args.host,
@@ -643,6 +683,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", type=Path, required=True)
     parser.add_argument("--configuration", choices=sorted(CONFIGURATIONS), required=True)
+    parser.add_argument(
+        "--track",
+        choices=sorted(TRACKS),
+        default="visible",
+        help="visible = suite the build agent received; sealed = suite withheld from it",
+    )
     parser.add_argument("--skill-root", type=Path)
     parser.add_argument("--host", choices=sorted(HOSTS), default="fixture")
     parser.add_argument("--policy", choices=sorted(POLICIES), default="read-only")

@@ -23,6 +23,21 @@ Before reading a proposed implementation as the answer, freeze:
 
 Compare designs only after independently deriving the frame. Use the same dimensions for every proposal: goal fit, evidence, expected benefit, cost, risk, reversibility, and validation method.
 
+## Requirements handoff
+
+When cases and candidate are written by separate agents, `requirements.md` is the only thing that crosses the boundary. Include:
+
+- goal, target user, and the real task;
+- observed failures and repeated work, with source labels;
+- desired behavior and explicit non-goals;
+- constraints the user stated;
+- acceptance intents in plain language;
+- open questions still unresolved.
+
+Exclude implementation choices, file layouts, script designs, and phrasing suggestions. A case agent that can see the intended implementation writes cases shaped like it, which is the failure the separation exists to prevent.
+
+Whatever is missing here is lost: the build agent cannot recover context from a conversation it never saw. Review this file with the user before spawning either subagent.
+
 ## Source labels
 
 Label every authoring example and claim source:
@@ -56,6 +71,10 @@ Keep content only when it is not reliably inferable, fixes an observed failure o
 Prefer a concrete example over a paragraph of generic explanation. Trace precautions to an observation, reliable source, or explicitly labelled high-risk assumption. Do not repeat a guess until it appears factual.
 
 Keep `SKILL.md` concise and imperative. The description must say what the Skill does and when it applies. Avoid a separate “when to use” body section because triggering occurs before the body is loaded.
+
+## Identity versus location
+
+`frontmatter.name` is the Skill's install identity: hosts discover a Skill by a directory whose name equals it. That constraint applies at the install target, not while authoring. Keep the candidate in an isolated directory with any convenient name and let the frozen suite's `skill` field carry the identity, or pass `--expect-name` to the checker.
 
 ## Resource placement
 

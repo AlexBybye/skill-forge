@@ -41,13 +41,23 @@ Write a compact goal card before comparing implementation proposals:
 
 Derive the goal card without copying the user's proposed implementation. Compare proposals afterward on goal fit, evidence, benefit, cost, risk, reversibility, and validation.
 
-### 3. Freeze the suite
+### 3. Freeze the suite in a separate context
 
-Create one strict `suite.json` before generating or observing the candidate. Keep baseline and candidate paths out of the suite; pass them to the runner.
+Do not write the suite yourself in the conversation that will also design the candidate. A single context leaks its implementation plan into the cases it writes, and freezing order cannot prevent that because the leak happens before the freeze.
 
-Include real core cases plus relevant boundary, failure, and near-negative cases. Mark every case with `observed`, `user_confirmed`, `synthetic`, or `assumed`. Treat development cases as development cases; do not relabel them as holdout.
+Use three stages with real context boundaries:
 
-Read [references/evaluation.md](references/evaluation.md) for suite and decision rules. Read [references/evidence.md](references/evidence.md) before authoring `suite.json` or interpreting a report.
+1. **Requirements.** In this conversation, clarify the goal, real cases, observed failures, and constraints. Write `requirements.md`. Do not discuss implementation. If the user asks how it will work, say that comes after the acceptance standard is fixed.
+2. **Cases.** Spawn a subagent whose only input is `requirements.md`. It writes `suite.json` and, when a holdout is wanted, `suite.sealed.json`. It must propose near-negative cases itself and ask the user once: which requests could this Skill wrongly steal? That answer is the user's unique knowledge and cannot be inferred.
+3. **Build.** Spawn a second subagent whose only inputs are `requirements.md` and `suite.json`. Never pass `suite.sealed.json` to it. The holdout is enforced by not passing the file; there is no access-control mechanism to bypass.
+
+Show the user the proposed cases in plain language before freezing. Spell out each case so they can actually reject one; do not summarize it as a count.
+
+Keep baseline and candidate paths out of both suites; pass them to the runner. Include real core cases plus relevant boundary, failure, and near-negative cases. Mark every case with `observed`, `user_confirmed`, `synthetic`, or `assumed`. Treat development cases as development cases; do not relabel them as holdout.
+
+Two agents from the same model share blind spots. Isolation prevents contamination, not ignorance, so the user review in stage 2 is the only heterogeneous check and cannot be skipped.
+
+Read [references/evaluation.md](references/evaluation.md) for suite and decision rules. Read [references/evidence.md](references/evidence.md) before authoring a suite or interpreting a report.
 
 ### 4. Draft or stage the candidate
 
@@ -69,6 +79,8 @@ Run:
 python3 scripts/check.py <candidate-skill> --suite <suite.json>
 ```
 
+`frontmatter.name` must equal the name the Skill will install as, not the isolated authoring directory. The checker takes that name from `--expect-name`, then from the frozen suite's `skill`, then from the directory. Pass the suite or `--expect-name` whenever the candidate directory is named something like `candidate/`.
+
 Treat a successful check as structure and input-contract evidence only. AST findings and unknowns inform the risk plan; absence of findings never proves runtime safety.
 
 Read [references/risk.md](references/risk.md) when the Skill contains scripts, writes files, accesses credentials, calls external services, creates shared triggers, or performs high-impact evaluation.
@@ -89,7 +101,31 @@ python3 scripts/run.py \
 
 For optimization, run the same frozen suite separately against `baseline` and `candidate`. For `no_skill`, omit `--skill-root` and use `--configuration no_skill`.
 
+Run a sealed suite as its own track, after the candidate is final:
+
+```bash
+python3 scripts/run.py \
+  --suite <suite.sealed.json> \
+  --configuration candidate \
+  --skill-root <candidate-skill> \
+  --host fixture \
+  --track sealed \
+  --runs-dir <runs-dir>
+```
+
 Use `fixture` only to test the pipeline itself; it cannot prove live model or host behavior. Do not run a custom validator unless the user trusts it and its exact relative path is passed with `--allow-validator`.
+
+Pick the host and policy from what each combination can actually observe:
+
+| Host | Policy | Objective evidence |
+|---|---|---|
+| `fixture` | `read-only` | every expectation, pipeline only |
+| `codex` | `workspace-write` | artifact expectations |
+| `codex` | `read-only` | none; the model cannot read case inputs or write artifacts |
+| `claude` | `read-only` | none; same limitation |
+| `claude` | `workspace-write` | unavailable in v1, rejected by the runner |
+
+A live host observes only the bytes a candidate leaves in the workspace. Exact stdout, process exit status, and route telemetry are unobservable there and score `not_run`, never `failed`. Write artifact expectations for live runs, and expect a prose-only Skill to stay unverified rather than fail. Read [references/evidence.md](references/evidence.md) for the full observability table.
 
 Read [references/hosts.md](references/hosts.md) before live host execution. Do not spend paid-model budget or enable writes beyond the agreed scope implicitly.
 
@@ -102,10 +138,13 @@ python3 scripts/score.py \
   --suite <suite.json> \
   --run <baseline-run> \
   --run <candidate-run> \
+  [--sealed-suite <suite.sealed.json> --sealed-run <sealed-run>] \
   --output-dir <new-report-dir>
 ```
 
 `score.py` must derive results from raw observations. Never add caller-authored `passed`, `winner`, or terminal facts to `results.jsonl`.
+
+Sealed results are scored as a separate track. They cap or extend the claims and never replace the visible decision: a sealed pass proves `visible_decision_reproduced_on_held_out_cases`, a sealed contradiction disproves it, and no sealed suite leaves `behavior_on_held_out_cases` unverified. Report a contradiction as a real limit on generalization rather than reclassifying the candidate.
 
 ### 8. Decide and iterate
 
@@ -127,7 +166,10 @@ Return the candidate path, frozen suite, run paths, report, remaining risks, and
 - disproven;
 - unverified;
 - not run;
-- indicative observations, when an optional judge was used.
+- indicative observations, for weak text matches and optional judges;
+- unobservable checks, for expectations the chosen host cannot see.
+
+Say plainly which cases could not be judged and why. An `inconclusive` report caused by host limits is an honest result; do not present it as a candidate defect.
 
 Do not infer installation, host activation, automatic routing, generalization, release readiness, or runtime safety from structure checks or explicit execution.
 

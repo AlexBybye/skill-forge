@@ -120,7 +120,11 @@ class RiskVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def inspect_skill(root: Path, suite_path: Path | None = None) -> dict[str, Any]:
+def inspect_skill(
+    root: Path,
+    suite_path: Path | None = None,
+    expected_name: str | None = None,
+) -> dict[str, Any]:
     root = root.expanduser().resolve(strict=True)
     errors: list[str] = []
     warnings: list[str] = []
@@ -140,6 +144,33 @@ def inspect_skill(root: Path, suite_path: Path | None = None) -> dict[str, Any]:
             "tree_digest": None,
             "suite_digest": None,
         }
+    # The name rule binds the install identity, not the authoring location: a
+    # candidate is authored in an isolated directory whose name is arbitrary.
+    # Prefer an explicit expectation, then the frozen suite, then the directory.
+    suite: dict[str, Any] | None = None
+    suite_digest: str | None = None
+    if suite_path is not None:
+        try:
+            suite = load_suite(suite_path)
+            suite_digest = digest_json(suite)
+            for case in suite["cases"]:
+                if case["fixture"] is not None:
+                    fixture = (suite_path.parent / case["fixture"]).resolve(strict=True)
+                    fixture.relative_to(suite_path.parent.resolve(strict=True))
+                    if not fixture.is_dir():
+                        raise ForgeError(f"fixture is not a directory: {case['fixture']}")
+        except (ForgeError, FileNotFoundError, ValueError) as exc:
+            errors.append(f"suite invalid: {exc}")
+            suite = None
+            suite_digest = None
+    if expected_name is not None:
+        name_source = "explicit"
+    elif suite is not None:
+        expected_name = suite["skill"]
+        name_source = "suite"
+    else:
+        expected_name = root.name
+        name_source = "directory"
     paths = {entry.path: entry for entry in entries}
     for entry in entries:
         path = Path(entry.path)
@@ -157,8 +188,11 @@ def inspect_skill(root: Path, suite_path: Path | None = None) -> dict[str, Any]:
     else:
         metadata, frontmatter_errors = _frontmatter(skill_md)
         errors.extend(frontmatter_errors)
-        if metadata.get("name") and metadata["name"] != root.name:
-            errors.append("frontmatter.name must match the Skill directory name")
+        if metadata.get("name") and metadata["name"] != expected_name:
+            errors.append(
+                f"frontmatter.name must equal the {name_source} Skill name "
+                f"{expected_name!r}, found {metadata['name']!r}"
+            )
         content = skill_md.read_text(encoding="utf-8")
         if "TODO" in content or "[TODO" in content:
             errors.append("SKILL.md contains placeholder TODO text")
@@ -200,19 +234,6 @@ def inspect_skill(root: Path, suite_path: Path | None = None) -> dict[str, Any]:
                 unknowns.append(
                     {"path": relative, "reason": "non_python_script_not_scanned"}
                 )
-    suite_digest: str | None = None
-    if suite_path is not None:
-        try:
-            suite = load_suite(suite_path)
-            suite_digest = digest_json(suite)
-            for case in suite["cases"]:
-                if case["fixture"] is not None:
-                    fixture = (suite_path.parent / case["fixture"]).resolve(strict=True)
-                    fixture.relative_to(suite_path.parent.resolve(strict=True))
-                    if not fixture.is_dir():
-                        raise ForgeError(f"fixture is not a directory: {case['fixture']}")
-        except (ForgeError, FileNotFoundError, ValueError) as exc:
-            errors.append(f"suite invalid: {exc}")
     try:
         skill_digest = tree_digest(root, reject_unsafe=True) if not errors else None
     except ForgeError as exc:
@@ -222,6 +243,8 @@ def inspect_skill(root: Path, suite_path: Path | None = None) -> dict[str, Any]:
         "version": 1,
         "skill_root": str(root),
         "skill_name": metadata.get("name"),
+        "expected_name": expected_name,
+        "expected_name_source": name_source,
         "structural_valid": not errors,
         "errors": sorted(set(errors)),
         "warnings": sorted(set(warnings)),
@@ -237,10 +260,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("skill_root", type=Path)
     parser.add_argument("--suite", type=Path)
+    parser.add_argument(
+        "--expect-name",
+        help=(
+            "Skill name the candidate will install as. Defaults to the frozen "
+            "suite's skill, then the directory name."
+        ),
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
-        report = inspect_skill(args.skill_root, args.suite)
+        report = inspect_skill(args.skill_root, args.suite, args.expect_name)
     except (ForgeError, FileNotFoundError, NotADirectoryError) as exc:
         report = {
             "version": 1,

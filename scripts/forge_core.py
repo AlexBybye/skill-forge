@@ -411,6 +411,36 @@ def load_suite(path: Path) -> dict[str, Any]:
     return validate_suite(read_json_strict(path))
 
 
+def validate_sealed_pairing(
+    visible: dict[str, Any], sealed: dict[str, Any]
+) -> None:
+    """Check that a sealed suite is a disjoint extension of the visible one.
+
+    A sealed suite is withheld from the agent that builds the candidate, so it
+    must target the same Skill and mode while adding genuinely new cases.
+    """
+    if sealed["skill"] != visible["skill"]:
+        raise ForgeError(
+            f"sealed suite targets {sealed['skill']!r}, visible targets {visible['skill']!r}"
+        )
+    if sealed["mode"] != visible["mode"]:
+        raise ForgeError(
+            f"sealed suite mode {sealed['mode']!r} differs from visible mode {visible['mode']!r}"
+        )
+    if sealed["reps"] != visible["reps"]:
+        raise ForgeError("sealed suite reps must equal visible suite reps")
+    overlap = sorted(
+        {case["id"] for case in sealed["cases"]}
+        & {case["id"] for case in visible["cases"]}
+    )
+    if overlap:
+        raise ForgeError(
+            f"sealed and visible suites share case ids: {', '.join(overlap)}"
+        )
+    if not sealed["cases"]:
+        raise ForgeError("sealed suite must contain at least one case")
+
+
 def render_skill_bundle(root: Path) -> str:
     root = root.expanduser().resolve(strict=True)
     parts: list[str] = []

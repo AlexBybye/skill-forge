@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "skill": "line-sorter",
+  "mode": "create",
+  "reps": 1,
+  "cases": [
+    {
+      "id": "sealed-duplicate-lines",
+      "source": "synthetic",
+      "plane": "execution",
+      "category": "boundary",
+      "critical": true,
+      "prompt": "Sort the lines in lines.txt.",
+      "fixture": "cases/sealed-duplicate-lines",
+      "expectations": [
+        {"kind": "stdout_equals", "value": "alpha\nalpha\nbeta\n"}
+      ]
+    },
+    {
+      "id": "sealed-trailing-whitespace",
+      "source": "synthetic",
+      "plane": "execution",
+      "category": "near_negative",
+      "critical": false,
+      "prompt": "Sort the lines in lines.txt without trimming them.",
+      "fixture": "cases/sealed-trailing-whitespace",
+      "expectations": [
+        {"kind": "stdout_equals", "value": "alpha\nbeta  \n"}
+      ]
+    }
+  ]
+}

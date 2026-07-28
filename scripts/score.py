@@ -17,11 +17,37 @@ from forge_core import (
     loads_json_strict,
     read_json_strict,
     resolve_under,
+    validate_sealed_pairing,
     write_json_atomic,
 )
 
 
 CASE_STATUSES = frozenset({"passed", "failed", "inconclusive", "not_run"})
+
+# A fixture host replays a frozen response, so every expectation is objective.
+# A live host only exposes two channels: free-form assistant text and the bytes
+# it left in the workspace. Artifact expectations are objective there; weak text
+# matches are indicative only; exact text, process exit status, and route
+# telemetry are not observable at all and must never decide a case.
+LIVE_OBJECTIVE_KINDS = frozenset(
+    {"file_exists", "file_not_exists", "file_sha256", "json_equals", "validator"}
+)
+LIVE_INDICATIVE_KINDS = frozenset({"stdout_contains", "stdout_not_contains"})
+UNOBSERVABLE_REASONS = {
+    "stdout_equals": "a live host returns assistant prose, not exact task stdout",
+    "exit_code": "a live host exit status describes the CLI, not the task",
+    "selected_skill": "no live host exposes route telemetry",
+}
+
+
+def _observability(kind: str, host: str) -> str:
+    if host == "fixture":
+        return "objective"
+    if kind in LIVE_OBJECTIVE_KINDS:
+        return "objective"
+    if kind in LIVE_INDICATIVE_KINDS:
+        return "indicative"
+    return "unobservable"
 
 
 def _load_run(run_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -157,7 +183,7 @@ def _evaluate_expectation(
 
 
 def _evaluate_record(
-    case: dict[str, Any], record: dict[str, Any], run_dir: Path
+    case: dict[str, Any], record: dict[str, Any], run_dir: Path, host: str
 ) -> dict[str, Any]:
     status = record.get("status")
     if status == "not_run":
@@ -167,15 +193,39 @@ def _evaluate_record(
     if status != "completed":
         return {"status": "inconclusive", "reason": "unknown run status", "checks": []}
     stdout = _read_raw(run_dir, record.get("stdout"), "stdout")
-    checks: list[dict[str, str]] = []
+    checks: list[dict[str, Any]] = []
     statuses: list[str] = []
     for expectation in case["expectations"]:
+        kind = expectation["kind"]
+        observability = _observability(kind, host)
+        if observability == "unobservable":
+            checks.append(
+                {
+                    "kind": kind,
+                    "status": "not_run",
+                    "observability": observability,
+                    "reason": UNOBSERVABLE_REASONS.get(kind, "not observable on this host"),
+                }
+            )
+            statuses.append("not_run")
+            continue
         check_status, reason = _evaluate_expectation(
             expectation, record, run_dir, stdout
         )
-        checks.append({"kind": expectation["kind"], "status": check_status, "reason": reason})
-        statuses.append(check_status)
-    if "failed" in statuses:
+        checks.append(
+            {
+                "kind": kind,
+                "status": check_status,
+                "observability": observability,
+                "reason": reason,
+            }
+        )
+        # An indicative check is recorded but never decides the case.
+        if observability == "objective":
+            statuses.append(check_status)
+    if not statuses:
+        result = "not_run"
+    elif "failed" in statuses:
         result = "failed"
     elif "inconclusive" in statuses:
         result = "inconclusive"
@@ -201,6 +251,7 @@ def _configuration_results(
     suite: dict[str, Any],
     run_dir: Path,
     records: list[dict[str, Any]],
+    host: str,
 ) -> tuple[dict[str, Any], bool]:
     indexed: dict[tuple[str, int], dict[str, Any]] = {}
     duplicate = False
@@ -221,7 +272,7 @@ def _configuration_results(
                     {"rep": rep, "status": "inconclusive", "reason": "missing observation", "checks": []}
                 )
             else:
-                result = _evaluate_record(case, record, run_dir)
+                result = _evaluate_record(case, record, run_dir, host)
                 result["rep"] = rep
                 reps.append(result)
         case_results[case["id"]] = {
@@ -343,9 +394,32 @@ def _claims(
     }
 
 
-def build_report(suite_path: Path, run_dirs: list[Path]) -> dict[str, Any]:
-    suite_path = suite_path.expanduser().resolve(strict=True)
-    suite = load_suite(suite_path)
+def _checks_by_observability(
+    by_configuration: dict[str, dict[str, Any]], wanted: str
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for configuration in sorted(by_configuration):
+        for case_id in sorted(by_configuration[configuration]):
+            for repetition in by_configuration[configuration][case_id]["repetitions"]:
+                for check in repetition.get("checks", []):
+                    if check.get("observability") != wanted:
+                        continue
+                    rows.append(
+                        {
+                            "configuration": configuration,
+                            "case_id": case_id,
+                            "rep": repetition["rep"],
+                            "kind": check["kind"],
+                            "status": check["status"],
+                            "reason": check.get("reason"),
+                        }
+                    )
+    return rows
+
+
+def _score_track(
+    suite: dict[str, Any], run_dirs: list[Path], track: str
+) -> dict[str, Any]:
     suite_digest = digest_json(suite)
     manifests: dict[str, dict[str, Any]] = {}
     by_configuration: dict[str, dict[str, Any]] = {}
@@ -355,23 +429,47 @@ def build_report(suite_path: Path, run_dirs: list[Path]) -> dict[str, Any]:
         run_dir = run_dir_input.expanduser().resolve(strict=True)
         manifest, records = _load_run(run_dir)
         if manifest.get("suite_digest") != suite_digest:
-            raise ForgeError(f"run suite digest does not match the supplied suite: {run_dir}")
+            raise ForgeError(f"run suite digest does not match its supplied suite: {run_dir}")
+        if manifest.get("track", "visible") != track:
+            raise ForgeError(
+                f"run track {manifest.get('track', 'visible')!r} does not match {track!r}: {run_dir}"
+            )
         configuration = manifest.get("configuration")
         if configuration in manifests:
-            raise ForgeError(f"multiple runs supplied for configuration: {configuration}")
+            raise ForgeError(f"multiple {track} runs supplied for configuration: {configuration}")
         if configuration not in {"candidate", "baseline", "no_skill"}:
             raise ForgeError(f"unknown run configuration: {configuration}")
-        results, matrix_complete = _configuration_results(suite, run_dir, records)
+        host = manifest.get("host")
+        if host not in {"fixture", "codex", "claude"}:
+            raise ForgeError(f"unknown run host: {host}")
+        results, matrix_complete = _configuration_results(
+            suite, run_dir, records, host
+        )
         manifests[configuration] = manifest
         by_configuration[configuration] = results
         complete[configuration] = matrix_complete
         evidence[configuration] = str(run_dir)
     decision, comparison = _decide(suite, by_configuration, complete)
-    case_rows: list[dict[str, Any]] = []
+    return {
+        "suite_digest": suite_digest,
+        "manifests": manifests,
+        "by_configuration": by_configuration,
+        "complete": complete,
+        "evidence": evidence,
+        "decision": decision,
+        "comparison": comparison,
+    }
+
+
+def _case_rows(
+    suite: dict[str, Any], by_configuration: dict[str, dict[str, Any]], track: str
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for case in suite["cases"]:
-        case_rows.append(
+        rows.append(
             {
                 "id": case["id"],
+                "track": track,
                 "plane": case["plane"],
                 "critical": case["critical"],
                 "source": case["source"],
@@ -381,6 +479,76 @@ def build_report(suite_path: Path, run_dirs: list[Path]) -> dict[str, Any]:
                 },
             }
         )
+    return rows
+
+
+# Sealed cases are held out from the build agent, so they are the only evidence
+# that speaks to behavior beyond what the candidate was written against. They
+# never overturn a visible decision on their own; they cap or extend its claims.
+SEALED_OUTCOMES = {
+    "confirms": "sealed_cases_agree_with_the_visible_decision",
+    "contradicts": "sealed_cases_contradict_the_visible_decision",
+    "inconclusive": "sealed_cases_did_not_resolve",
+}
+
+
+def _sealed_verdict(visible: dict[str, Any], sealed: dict[str, Any]) -> str:
+    if sealed["decision"] == "inconclusive":
+        return "inconclusive"
+    positive = {
+        "handoff_candidate",
+        "adopt_candidate_for_selected_cases",
+        "no_skill_supported_for_selected_cases",
+    }
+    visible_positive = visible["decision"] in positive
+    sealed_positive = sealed["decision"] in positive
+    return "confirms" if visible_positive == sealed_positive else "contradicts"
+
+
+def build_report(
+    suite_path: Path,
+    run_dirs: list[Path],
+    sealed_suite_path: Path | None = None,
+    sealed_run_dirs: list[Path] | None = None,
+) -> dict[str, Any]:
+    suite_path = suite_path.expanduser().resolve(strict=True)
+    suite = load_suite(suite_path)
+    visible = _score_track(suite, run_dirs, "visible")
+    suite_digest = visible["suite_digest"]
+    manifests = visible["manifests"]
+    by_configuration = visible["by_configuration"]
+    complete = visible["complete"]
+    evidence = visible["evidence"]
+    decision, comparison = visible["decision"], visible["comparison"]
+    sealed_section: dict[str, Any] | None = None
+    if sealed_suite_path is not None:
+        sealed_suite = load_suite(sealed_suite_path.expanduser().resolve(strict=True))
+        validate_sealed_pairing(suite, sealed_suite)
+        sealed = _score_track(sealed_suite, sealed_run_dirs or [], "sealed")
+        verdict = _sealed_verdict(visible, sealed)
+        sealed_section = {
+            "suite_digest": sealed["suite_digest"],
+            "runs": sealed["evidence"],
+            "matrix_complete": sealed["complete"],
+            "cases": _case_rows(sealed_suite, sealed["by_configuration"], "sealed"),
+            "comparison": sealed["comparison"],
+            "decision": sealed["decision"],
+            "verdict": verdict,
+            "verdict_meaning": SEALED_OUTCOMES[verdict],
+            "authority": "held_out_evidence_caps_claims_and_never_replaces_the_visible_decision",
+        }
+    elif sealed_run_dirs:
+        raise ForgeError("sealed runs require --sealed-suite")
+    case_rows = _case_rows(suite, by_configuration, "visible")
+    claims = _claims(suite, decision, manifests, by_configuration)
+    if sealed_section is None:
+        claims["unverified"].append("behavior_on_held_out_cases")
+    elif sealed_section["verdict"] == "confirms":
+        claims["proven"].append("visible_decision_reproduced_on_held_out_cases")
+    elif sealed_section["verdict"] == "contradicts":
+        claims["disproven"].append("visible_decision_reproduced_on_held_out_cases")
+    else:
+        claims["not_run"].append("held_out_case_confirmation")
     return {
         "version": 1,
         "suite_digest": suite_digest,
@@ -399,8 +567,14 @@ def build_report(suite_path: Path, run_dirs: list[Path]) -> dict[str, Any]:
         "matrix_complete": complete,
         "cases": case_rows,
         "comparison": comparison,
-        "claims": _claims(suite, decision, manifests, by_configuration),
-        "indicative_observations": [],
+        "claims": claims,
+        "indicative_observations": _checks_by_observability(
+            by_configuration, "indicative"
+        ),
+        "unobservable_checks": _checks_by_observability(
+            by_configuration, "unobservable"
+        ),
+        "sealed": sealed_section,
         "decision": decision,
         "limitations": [
             "selected_cases_only",
@@ -411,6 +585,7 @@ def build_report(suite_path: Path, run_dirs: list[Path]) -> dict[str, Any]:
                 if manifests and all(item.get("host") == "fixture" for item in manifests.values())
                 else []
             ),
+            *([] if sealed_section else ["no_held_out_cases"]),
         ],
     }
 
@@ -432,6 +607,49 @@ def _markdown(report: dict[str, Any]) -> str:
         lines.append(
             f"| {case['id']} | {case['plane']} | {'yes' if case['critical'] else 'no'} | {results} |"
         )
+    sealed = report.get("sealed")
+    if sealed:
+        lines.extend(
+            [
+                "",
+                "## Held-out cases",
+                "",
+                f"Sealed decision: `{sealed['decision']}` ({sealed['verdict_meaning']})",
+                "",
+                "| Case | Plane | Critical | Results |",
+                "|---|---|---:|---|",
+            ]
+        )
+        for case in sealed["cases"]:
+            results = ", ".join(
+                f"{configuration}={status}"
+                for configuration, status in sorted(case["configurations"].items())
+            )
+            lines.append(
+                f"| {case['id']} | {case['plane']} | {'yes' if case['critical'] else 'no'} | {results} |"
+            )
+        lines.extend(
+            [
+                "",
+                "These cases were withheld from the agent that built the candidate. They cap or extend the claims above; they never replace the decision.",
+            ]
+        )
+    unobservable = report.get("unobservable_checks", [])
+    if unobservable:
+        lines.extend(["", "## Not observable on this host", ""])
+        for item in unobservable:
+            lines.append(
+                f"- `{item['case_id']}` / `{item['kind']}`: {item['reason']}"
+            )
+    indicative = report.get("indicative_observations", [])
+    if indicative:
+        lines.extend(
+            ["", "## Indicative observations (do not decide any case)", ""]
+        )
+        for item in indicative:
+            lines.append(
+                f"- `{item['case_id']}` / `{item['kind']}`: {item['status']}"
+            )
     lines.extend(["", "## Claims", ""])
     labels = {
         "proven": "Proven",
@@ -456,13 +674,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", type=Path, required=True)
     parser.add_argument("--run", type=Path, action="append", required=True)
+    parser.add_argument(
+        "--sealed-suite",
+        type=Path,
+        help="suite withheld from the build agent; scored as held-out evidence",
+    )
+    parser.add_argument("--sealed-run", type=Path, action="append", default=[])
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         output_dir = args.output_dir.expanduser().resolve(strict=False)
         if output_dir.exists() or output_dir.is_symlink():
             raise ForgeError(f"output directory already exists: {output_dir}")
-        report = build_report(args.suite, args.run)
+        report = build_report(
+            args.suite, args.run, args.sealed_suite, args.sealed_run
+        )
         output_dir.mkdir(parents=True)
         write_json_atomic(output_dir / "report.json", report)
         (output_dir / "report.md").write_text(_markdown(report), encoding="utf-8")
