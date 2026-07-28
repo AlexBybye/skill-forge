@@ -173,6 +173,26 @@ Say plainly which cases could not be judged and why. An `inconclusive` report ca
 
 Do not infer installation, host activation, automatic routing, generalization, release readiness, or runtime safety from structure checks or explicit execution.
 
+## Package a distribution
+
+Build a host distribution from current source bytes into a new destination, then verify it:
+
+```bash
+python3 scripts/package.py build \
+  --source <skill-forge-source> \
+  --host <codex-or-claude> \
+  --output <dist>/skill-forge \
+  --manifest <dist>/skill-forge.manifest.json
+python3 scripts/package.py verify \
+  --candidate <dist>/skill-forge \
+  --manifest <dist>/skill-forge.manifest.json \
+  --output <dist>/skill-forge-receipt.json
+```
+
+The payload is `SKILL.md`, `VERSION`, `LICENSE`, `references/`, and `scripts/`, plus `agents/` for Codex. Fixtures, tests, and the packaging script itself are authoring inputs and never ship.
+
+The receipt is a byte binding: it proves the shipped tree matches its manifest and that POSIX write bits were removed. It is not a signature, does not install anything, and does not prove the host loaded the Skill. A principal with write permission can rebuild any of it.
+
 ## Reauthorization boundaries
 
 The explicit invocation authorizes read-only analysis and isolated candidate work inside the requested workspace. Ask again before:

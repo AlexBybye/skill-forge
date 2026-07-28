@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import check as check_module  # noqa: E402
 import forge_core  # noqa: E402
+import package as package_module  # noqa: E402
 import run as run_module  # noqa: E402
 import score as score_module  # noqa: E402
 
@@ -852,6 +854,156 @@ class ScorerTests(unittest.TestCase):
         report = score_module.build_report(fixture / "suite.json", [run_dir])
         self.assertIn("fixture_host_only", report["limitations"])
         self.assertIn("automatic_routing", report["claims"]["not_run"])
+
+
+class PackagingTests(unittest.TestCase):
+    """A distribution ships runtime bytes only and rechecks against current bytes."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self) -> None:
+        for current, directories, files in os.walk(self.root):
+            for name in directories + files:
+                path = Path(current) / name
+                try:
+                    path.chmod(0o700)
+                except OSError:
+                    pass
+        self.temporary.cleanup()
+
+    def _build(self, host: str = "claude") -> tuple[Path, Path]:
+        output = self.root / host / "skill-forge"
+        manifest = self.root / host / "skill-forge.manifest.json"
+        package_module.build(SKILL_ROOT, host, output, manifest)
+        return output, manifest
+
+    def test_payload_excludes_development_material(self) -> None:
+        output, _ = self._build()
+        shipped = {
+            entry.path
+            for entry in forge_core.inspect_tree(output, reject_unsafe=True)
+            if entry.kind == "file"
+        }
+        self.assertIn("SKILL.md", shipped)
+        self.assertIn("scripts/run.py", shipped)
+        self.assertIn("references/evidence.md", shipped)
+        self.assertFalse(any(path.startswith("fixtures/") for path in shipped))
+        self.assertFalse(any(path.startswith("tests/") for path in shipped))
+        self.assertNotIn("scripts/package.py", shipped)
+
+    def test_codex_ships_the_interface_declaration(self) -> None:
+        codex, _ = self._build("codex")
+        claude, _ = self._build("claude")
+
+        def shipped(root: Path) -> set[str]:
+            return {
+                entry.path
+                for entry in forge_core.inspect_tree(root, reject_unsafe=True)
+                if entry.kind == "file"
+            }
+
+        self.assertIn("agents/openai.yaml", shipped(codex))
+        self.assertNotIn("agents/openai.yaml", shipped(claude))
+
+    def test_verify_accepts_a_fresh_build(self) -> None:
+        output, manifest = self._build()
+        receipt = package_module.verify(output, manifest)
+        self.assertTrue(receipt["tree_read_only"])
+        self.assertEqual(receipt["claim_cap"], "byte_binding_only")
+
+    def test_verify_rejects_a_modified_file(self) -> None:
+        output, manifest = self._build()
+        target = output / "SKILL.md"
+        target.chmod(0o600)
+        target.write_text("tampered\n", encoding="utf-8")
+        with self.assertRaises(forge_core.ForgeError) as caught:
+            package_module.verify(output, manifest)
+        self.assertIn("digest changed", str(caught.exception))
+
+    def test_verify_rejects_an_unexpected_file(self) -> None:
+        output, manifest = self._build()
+        output.chmod(0o700)
+        (output / "extra.md").write_text("x\n", encoding="utf-8")
+        with self.assertRaises(forge_core.ForgeError) as caught:
+            package_module.verify(output, manifest)
+        self.assertIn("unexpected files", str(caught.exception))
+
+    def test_verify_rejects_a_missing_file(self) -> None:
+        output, manifest = self._build()
+        references = output / "references"
+        references.chmod(0o700)
+        (references / "risk.md").chmod(0o600)
+        (references / "risk.md").unlink()
+        with self.assertRaises(forge_core.ForgeError) as caught:
+            package_module.verify(output, manifest)
+        self.assertIn("missing files", str(caught.exception))
+
+    def test_build_refuses_an_existing_destination(self) -> None:
+        output, manifest = self._build()
+        with self.assertRaises(forge_core.ForgeError):
+            package_module.build(SKILL_ROOT, "claude", output, manifest)
+
+    def test_packaged_scripts_run_standalone(self) -> None:
+        """The shipped tree must run check/run/score without the source tree."""
+        output, _ = self._build()
+        workspace = self.root / "work"
+        shutil.copytree(SKILL_ROOT / "fixtures" / "create", workspace)
+        environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        checked = subprocess.run(
+            [
+                sys.executable,
+                str(output / "scripts" / "check.py"),
+                str(workspace / "candidate"),
+                "--suite",
+                str(workspace / "suite.json"),
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        run = subprocess.run(
+            [
+                sys.executable,
+                str(output / "scripts" / "run.py"),
+                "--suite",
+                str(workspace / "suite.json"),
+                "--configuration",
+                "candidate",
+                "--skill-root",
+                str(workspace / "candidate"),
+                "--host",
+                "fixture",
+                "--runs-dir",
+                str(self.root / "runs"),
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        scored = subprocess.run(
+            [
+                sys.executable,
+                str(output / "scripts" / "score.py"),
+                "--suite",
+                str(workspace / "suite.json"),
+                "--run",
+                run.stdout.strip(),
+                "--output-dir",
+                str(self.root / "report"),
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        self.assertEqual(scored.returncode, 0, scored.stderr)
+        report = json.loads(
+            (self.root / "report" / "report.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(report["decision"], "handoff_candidate")
 
 
 if __name__ == "__main__":
