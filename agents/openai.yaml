@@ -1,0 +1,6 @@
+interface:
+  display_name: "Skill Forge"
+  short_description: "Create and improve Skills with grounded tests"
+  default_prompt: "Use $skill-forge to create or improve a Skill from real task evidence."
+policy:
+  allow_implicit_invocation: false

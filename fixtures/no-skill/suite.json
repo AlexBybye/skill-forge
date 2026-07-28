@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "skill": "plain-summary",
+  "mode": "no_skill",
+  "reps": 1,
+  "cases": [
+    {
+      "id": "core-short-summary",
+      "source": "user_confirmed",
+      "plane": "execution",
+      "category": "core",
+      "critical": true,
+      "prompt": "Summarize the supplied sentence in three words.",
+      "fixture": "cases/core-short-summary",
+      "expectations": [
+        {"kind": "stdout_equals", "value": "Small tools suffice.\n"}
+      ]
+    },
+    {
+      "id": "boundary-empty",
+      "source": "synthetic",
+      "plane": "execution",
+      "category": "boundary",
+      "critical": true,
+      "prompt": "Return an empty summary for empty input.",
+      "fixture": "cases/boundary-empty",
+      "expectations": [
+        {"kind": "stdout_equals", "value": ""}
+      ]
+    }
+  ]
+}

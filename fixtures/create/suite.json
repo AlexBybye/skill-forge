@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "skill": "line-sorter",
+  "mode": "create",
+  "reps": 1,
+  "cases": [
+    {
+      "id": "core-sort",
+      "source": "user_confirmed",
+      "plane": "execution",
+      "category": "core",
+      "critical": true,
+      "prompt": "Sort the lines in lines.txt.",
+      "fixture": "cases/core-sort",
+      "expectations": [
+        {"kind": "stdout_equals", "value": "alpha\nbeta\n"}
+      ]
+    },
+    {
+      "id": "empty-input",
+      "source": "synthetic",
+      "plane": "execution",
+      "category": "boundary",
+      "critical": true,
+      "prompt": "Sort the empty lines.txt file.",
+      "fixture": "cases/empty-input",
+      "expectations": [
+        {"kind": "stdout_equals", "value": ""}
+      ]
+    },
+    {
+      "id": "route-near-negative",
+      "source": "synthetic",
+      "plane": "routing",
+      "category": "near_negative",
+      "critical": true,
+      "prompt": "Explain why text files sometimes end with a newline.",
+      "fixture": "cases/route-near-negative",
+      "expectations": [
+        {"kind": "selected_skill", "value": null}
+      ]
+    }
+  ]
+}

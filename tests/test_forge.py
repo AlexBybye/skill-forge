@@ -1,0 +1,482 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
+import tempfile
+import unittest
+
+
+sys.dont_write_bytecode = True
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = SKILL_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+import check as check_module  # noqa: E402
+import forge_core  # noqa: E402
+import run as run_module  # noqa: E402
+import score as score_module  # noqa: E402
+
+
+def write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def make_skill(root: Path, name: str = "test-skill", body: str = "Follow the task.") -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "SKILL.md").write_text(
+        "---\n"
+        f"name: {name}\n"
+        "description: Perform a deterministic test task. Use when the test task is requested.\n"
+        "---\n\n"
+        f"# Test Skill\n\n{body}\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def execution_case(**updates: object) -> dict[str, object]:
+    case: dict[str, object] = {
+        "id": "core",
+        "source": "observed",
+        "plane": "execution",
+        "category": "core",
+        "critical": True,
+        "prompt": "Perform the test task.",
+        "fixture": "cases/core",
+        "expectations": [{"kind": "stdout_equals", "value": "ok\n"}],
+    }
+    case.update(updates)
+    return case
+
+
+def suite_value(mode: str = "create", cases: list[dict[str, object]] | None = None) -> dict[str, object]:
+    return {
+        "version": 1,
+        "skill": "test-skill",
+        "mode": mode,
+        "reps": 1,
+        "cases": cases or [execution_case()],
+    }
+
+
+def fixture_response(root: Path, configuration: str, **updates: object) -> None:
+    value: dict[str, object] = {
+        "stdout": "ok\n",
+        "stderr": "",
+        "exit_code": 0,
+        "selected_skill": None,
+        "artifacts": {},
+    }
+    value.update(updates)
+    write_json(root / "cases" / "core" / f"response.{configuration}.json", value)
+
+
+def run_fixture(
+    suite: Path,
+    runs_dir: Path,
+    configuration: str,
+    skill_root: Path | None,
+    allowed: list[str] | None = None,
+) -> Path:
+    return run_module.execute(
+        argparse.Namespace(
+            suite=suite,
+            configuration=configuration,
+            skill_root=skill_root,
+            host="fixture",
+            policy="read-only",
+            runs_dir=runs_dir,
+            model=None,
+            executable=None,
+            timeout_seconds=30,
+            allow_validator=allowed or [],
+        )
+    )
+
+
+class ContractTests(unittest.TestCase):
+    def test_duplicate_json_key_rejected(self) -> None:
+        with self.assertRaises(forge_core.ForgeError):
+            forge_core.loads_json_strict('{"a":1,"a":2}')
+
+    def test_nonfinite_json_rejected(self) -> None:
+        with self.assertRaises(forge_core.ForgeError):
+            forge_core.loads_json_strict('{"a":NaN}')
+
+    def test_unknown_suite_field_rejected(self) -> None:
+        value = suite_value()
+        value["winner"] = "candidate"
+        with self.assertRaises(forge_core.ForgeError):
+            forge_core.validate_suite(value)
+
+    def test_duplicate_case_id_rejected(self) -> None:
+        case = execution_case()
+        with self.assertRaises(forge_core.ForgeError):
+            forge_core.validate_suite(suite_value(cases=[case, dict(case)]))
+
+    def test_routing_prompt_cannot_name_skill(self) -> None:
+        case = execution_case(
+            plane="routing",
+            prompt="Use test-skill for this task.",
+            expectations=[{"kind": "selected_skill", "value": "test-skill"}],
+        )
+        with self.assertRaises(forge_core.ForgeError):
+            forge_core.validate_suite(suite_value(cases=[case]))
+
+    def test_routing_case_has_closed_expectation(self) -> None:
+        case = execution_case(
+            plane="routing",
+            expectations=[{"kind": "stdout_equals", "value": "ok\n"}],
+        )
+        with self.assertRaises(forge_core.ForgeError):
+            forge_core.validate_suite(suite_value(cases=[case]))
+
+    def test_critical_contains_only_rejected(self) -> None:
+        case = execution_case(expectations=[{"kind": "stdout_contains", "value": "ok"}])
+        with self.assertRaises(forge_core.ForgeError):
+            forge_core.validate_suite(suite_value(cases=[case]))
+
+    def test_critical_file_exists_only_rejected(self) -> None:
+        case = execution_case(expectations=[{"kind": "file_exists", "path": "out.txt"}])
+        with self.assertRaises(forge_core.ForgeError):
+            forge_core.validate_suite(suite_value(cases=[case]))
+
+    def test_empty_stdout_exact_is_valid(self) -> None:
+        case = execution_case(expectations=[{"kind": "stdout_equals", "value": ""}])
+        validated = forge_core.validate_suite(suite_value(cases=[case]))
+        self.assertEqual(validated["cases"][0]["expectations"][0]["value"], "")
+
+    def test_parent_path_rejected(self) -> None:
+        case = execution_case(fixture="../escape")
+        with self.assertRaises(forge_core.ForgeError):
+            forge_core.validate_suite(suite_value(cases=[case]))
+
+    def test_snapshot_matches_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = make_skill(root / "test-skill")
+            destination = root / "copy"
+            digest = forge_core.snapshot_tree(source, destination)
+            self.assertEqual(digest, forge_core.tree_digest(destination))
+
+    def test_snapshot_rejects_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = make_skill(root / "test-skill")
+            (source / "target.txt").write_text("x", encoding="utf-8")
+            try:
+                os.symlink("target.txt", source / "link.txt")
+            except OSError as exc:
+                self.skipTest(str(exc))
+            with self.assertRaises(forge_core.ForgeError):
+                forge_core.snapshot_tree(source, root / "copy")
+
+
+class CheckTests(unittest.TestCase):
+    def test_valid_skill_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            skill = make_skill(Path(temporary) / "test-skill")
+            report = check_module.inspect_skill(skill)
+            self.assertTrue(report["structural_valid"])
+
+    def test_missing_skill_md_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            report = check_module.inspect_skill(Path(temporary))
+            self.assertFalse(report["structural_valid"])
+
+    def test_frontmatter_name_mismatch_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            skill = make_skill(Path(temporary) / "test-skill", name="wrong-name")
+            report = check_module.inspect_skill(skill)
+            self.assertIn("frontmatter.name must match the Skill directory name", report["errors"])
+
+    def test_todo_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            skill = make_skill(Path(temporary) / "test-skill", body="TODO: finish")
+            report = check_module.inspect_skill(skill)
+            self.assertFalse(report["structural_valid"])
+
+    def test_cache_file_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            skill = make_skill(Path(temporary) / "test-skill")
+            cache = skill / "scripts" / "__pycache__"
+            cache.mkdir(parents=True)
+            (cache / "x.pyc").write_bytes(b"cache")
+            report = check_module.inspect_skill(skill)
+            self.assertFalse(report["structural_valid"])
+
+    def test_sensitive_file_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            skill = make_skill(Path(temporary) / "test-skill")
+            (skill / ".env").write_text("TOKEN=x", encoding="utf-8")
+            report = check_module.inspect_skill(skill)
+            self.assertFalse(report["structural_valid"])
+
+    def test_ast_risk_is_advisory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            skill = make_skill(Path(temporary) / "test-skill")
+            scripts = skill / "scripts"
+            scripts.mkdir()
+            (scripts / "danger.py").write_text("eval(input())\n", encoding="utf-8")
+            report = check_module.inspect_skill(skill)
+            self.assertTrue(report["structural_valid"])
+            self.assertEqual(report["risk_findings"][0]["rule"], "dynamic-code")
+
+    def test_unparsed_script_is_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            skill = make_skill(Path(temporary) / "test-skill")
+            scripts = skill / "scripts"
+            scripts.mkdir()
+            (scripts / "broken.py").write_text("if :\n", encoding="utf-8")
+            report = check_module.inspect_skill(skill)
+            self.assertTrue(report["risk_unknowns"])
+
+    def test_nested_reference_warns(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            skill = make_skill(Path(temporary) / "test-skill")
+            references = skill / "references"
+            references.mkdir()
+            (references / "a.md").write_text("See [b](b.md).\n", encoding="utf-8")
+            (references / "b.md").write_text("# B\n", encoding="utf-8")
+            report = check_module.inspect_skill(skill)
+            self.assertTrue(any("nested local references" in item for item in report["warnings"]))
+
+
+class RunnerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.skill = make_skill(self.root / "test-skill")
+        self.suite = self.root / "suite.json"
+        write_json(self.suite, suite_value())
+        fixture_response(self.root, "candidate")
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_candidate_requires_skill_root(self) -> None:
+        with self.assertRaises(forge_core.ForgeError):
+            run_fixture(self.suite, self.root / "runs", "candidate", None)
+
+    def test_no_skill_rejects_skill_root(self) -> None:
+        write_json(self.suite, suite_value(mode="no_skill"))
+        fixture_response(self.root, "no_skill")
+        with self.assertRaises(forge_core.ForgeError):
+            run_fixture(self.suite, self.root / "runs", "no_skill", self.skill)
+
+    def test_fixture_run_records_raw_observation(self) -> None:
+        run_dir = run_fixture(self.suite, self.root / "runs", "candidate", self.skill)
+        line = (run_dir / "results.jsonl").read_text(encoding="utf-8").strip()
+        record = json.loads(line)
+        self.assertEqual(record["status"], "completed")
+        self.assertNotIn("passed", record)
+        self.assertNotIn("winner", record)
+
+    def test_fixture_writes_and_hashes_artifact(self) -> None:
+        case = execution_case(
+            expectations=[
+                {
+                    "kind": "json_equals",
+                    "path": "output.json",
+                    "value": {"ok": True},
+                }
+            ]
+        )
+        write_json(self.suite, suite_value(cases=[case]))
+        fixture_response(self.root, "candidate", artifacts={"output.json": "{\"ok\":true}\n"})
+        run_dir = run_fixture(self.suite, self.root / "runs", "candidate", self.skill)
+        record = json.loads((run_dir / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertIn("output.json", record["artifacts"])
+        self.assertEqual(record["artifact_delta"]["created"], ["output.json"])
+
+    def test_fixture_routing_telemetry_is_recorded(self) -> None:
+        case = execution_case(
+            plane="routing",
+            prompt="Organize this configuration into stable order.",
+            expectations=[{"kind": "selected_skill", "value": "test-skill"}],
+        )
+        write_json(self.suite, suite_value(cases=[case]))
+        fixture_response(self.root, "candidate", selected_skill="test-skill")
+        run_dir = run_fixture(self.suite, self.root / "runs", "candidate", self.skill)
+        record = json.loads((run_dir / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(record["selected_skill"], "test-skill")
+
+    def test_validator_is_not_run_without_allowlist(self) -> None:
+        validator = self.root / "checks" / "ok.py"
+        validator.parent.mkdir()
+        validator.write_text("raise SystemExit(0)\n", encoding="utf-8")
+        case = execution_case(
+            expectations=[{"kind": "validator", "path": "checks/ok.py"}]
+        )
+        write_json(self.suite, suite_value(cases=[case]))
+        run_dir = run_fixture(self.suite, self.root / "runs", "candidate", self.skill)
+        record = json.loads((run_dir / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(record["validators"][0]["status"], "not_run")
+
+    def test_allowed_validator_runs(self) -> None:
+        validator = self.root / "checks" / "ok.py"
+        validator.parent.mkdir()
+        validator.write_text("raise SystemExit(0)\n", encoding="utf-8")
+        case = execution_case(
+            expectations=[{"kind": "validator", "path": "checks/ok.py"}]
+        )
+        write_json(self.suite, suite_value(cases=[case]))
+        run_dir = run_fixture(
+            self.suite,
+            self.root / "runs",
+            "candidate",
+            self.skill,
+            ["checks/ok.py"],
+        )
+        record = json.loads((run_dir / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(record["validators"][0]["status"], "completed")
+
+    def test_validator_artifact_drift_is_integrity_error(self) -> None:
+        validator = self.root / "checks" / "mutate.py"
+        validator.parent.mkdir()
+        validator.write_text("from pathlib import Path\nPath('changed.txt').write_text('x')\n", encoding="utf-8")
+        case = execution_case(
+            expectations=[{"kind": "validator", "path": "checks/mutate.py"}]
+        )
+        write_json(self.suite, suite_value(cases=[case]))
+        run_dir = run_fixture(
+            self.suite,
+            self.root / "runs",
+            "candidate",
+            self.skill,
+            ["checks/mutate.py"],
+        )
+        record = json.loads((run_dir / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(record["status"], "integrity_error")
+
+
+class ScorerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _copy_fixture(self, name: str) -> Path:
+        source = SKILL_ROOT / "fixtures" / name
+        destination = self.root / name
+        shutil.copytree(source, destination)
+        return destination
+
+    def test_create_golden_handoff(self) -> None:
+        fixture = self._copy_fixture("create")
+        run_dir = run_fixture(
+            fixture / "suite.json", self.root / "runs", "candidate", fixture / "candidate"
+        )
+        report = score_module.build_report(fixture / "suite.json", [run_dir])
+        self.assertEqual(report["decision"], "handoff_candidate")
+
+    def test_optimize_golden_adopts(self) -> None:
+        fixture = self._copy_fixture("optimize")
+        baseline = run_fixture(
+            fixture / "suite.json", self.root / "runs", "baseline", fixture / "baseline"
+        )
+        candidate = run_fixture(
+            fixture / "suite.json", self.root / "runs", "candidate", fixture / "candidate"
+        )
+        report = score_module.build_report(fixture / "suite.json", [baseline, candidate])
+        self.assertEqual(report["decision"], "adopt_candidate_for_selected_cases")
+        self.assertTrue(report["comparison"]["improvements"])
+
+    def test_no_skill_golden_supported(self) -> None:
+        fixture = self._copy_fixture("no-skill")
+        run_dir = run_fixture(
+            fixture / "suite.json", self.root / "runs", "no_skill", None
+        )
+        report = score_module.build_report(fixture / "suite.json", [run_dir])
+        self.assertEqual(report["decision"], "no_skill_supported_for_selected_cases")
+
+    def test_optimize_without_gain_keeps_baseline(self) -> None:
+        fixture = self._copy_fixture("optimize")
+        for case in ("core-canonical-bytes", "duplicate-key-boundary"):
+            base = fixture / "cases" / case / "response.baseline.json"
+            candidate = fixture / "cases" / case / "response.candidate.json"
+            candidate.write_text(base.read_text(encoding="utf-8"), encoding="utf-8")
+        baseline = run_fixture(
+            fixture / "suite.json", self.root / "runs", "baseline", fixture / "baseline"
+        )
+        candidate = run_fixture(
+            fixture / "suite.json", self.root / "runs", "candidate", fixture / "candidate"
+        )
+        report = score_module.build_report(fixture / "suite.json", [baseline, candidate])
+        self.assertEqual(report["decision"], "keep_baseline")
+
+    def test_critical_candidate_failure_keeps_baseline(self) -> None:
+        fixture = self._copy_fixture("optimize")
+        core = fixture / "cases" / "core-canonical-bytes"
+        correct = (core / "response.candidate.json").read_text(encoding="utf-8")
+        wrong = (core / "response.baseline.json").read_text(encoding="utf-8")
+        (core / "response.baseline.json").write_text(correct, encoding="utf-8")
+        (core / "response.candidate.json").write_text(wrong, encoding="utf-8")
+        boundary = fixture / "cases" / "duplicate-key-boundary"
+        (boundary / "response.baseline.json").write_text(
+            (boundary / "response.candidate.json").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        baseline = run_fixture(
+            fixture / "suite.json", self.root / "runs", "baseline", fixture / "baseline"
+        )
+        candidate = run_fixture(
+            fixture / "suite.json", self.root / "runs", "candidate", fixture / "candidate"
+        )
+        report = score_module.build_report(fixture / "suite.json", [baseline, candidate])
+        self.assertEqual(report["decision"], "keep_baseline")
+
+    def test_incomplete_matrix_is_inconclusive(self) -> None:
+        fixture = self._copy_fixture("create")
+        run_dir = run_fixture(
+            fixture / "suite.json", self.root / "runs", "candidate", fixture / "candidate"
+        )
+        results = run_dir / "results.jsonl"
+        lines = results.read_text(encoding="utf-8").splitlines()
+        results.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+        manifest_path = run_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["result_count"] -= 1
+        manifest["results_digest"] = forge_core.digest_file(results)
+        write_json(manifest_path, manifest)
+        report = score_module.build_report(fixture / "suite.json", [run_dir])
+        self.assertEqual(report["decision"], "inconclusive")
+
+    def test_results_digest_mismatch_rejected(self) -> None:
+        fixture = self._copy_fixture("create")
+        run_dir = run_fixture(
+            fixture / "suite.json", self.root / "runs", "candidate", fixture / "candidate"
+        )
+        with (run_dir / "results.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write("{}\n")
+        with self.assertRaises(forge_core.ForgeError):
+            score_module.build_report(fixture / "suite.json", [run_dir])
+
+    def test_suite_digest_mismatch_rejected(self) -> None:
+        create = self._copy_fixture("create")
+        no_skill = self._copy_fixture("no-skill")
+        run_dir = run_fixture(
+            create / "suite.json", self.root / "runs", "candidate", create / "candidate"
+        )
+        with self.assertRaises(forge_core.ForgeError):
+            score_module.build_report(no_skill / "suite.json", [run_dir])
+
+    def test_fixture_claim_cap_is_reported(self) -> None:
+        fixture = self._copy_fixture("create")
+        run_dir = run_fixture(
+            fixture / "suite.json", self.root / "runs", "candidate", fixture / "candidate"
+        )
+        report = score_module.build_report(fixture / "suite.json", [run_dir])
+        self.assertIn("fixture_host_only", report["limitations"])
+        self.assertIn("automatic_routing", report["claims"]["not_run"])
+
+
+if __name__ == "__main__":
+    unittest.main()

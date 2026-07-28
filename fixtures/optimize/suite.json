@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "skill": "canonical-json",
+  "mode": "optimize",
+  "reps": 2,
+  "cases": [
+    {
+      "id": "core-canonical-bytes",
+      "source": "observed",
+      "plane": "execution",
+      "category": "core",
+      "critical": true,
+      "prompt": "Canonicalize payload.json into output.json.",
+      "fixture": "cases/core-canonical-bytes",
+      "expectations": [
+        {"kind": "exit_code", "value": 0},
+        {
+          "kind": "file_sha256",
+          "path": "output.json",
+          "value": "sha256:e8d38819d39f705646bfb643368eca78f7db476c16471dbc33b941b27326410d"
+        }
+      ]
+    },
+    {
+      "id": "duplicate-key-boundary",
+      "source": "user_confirmed",
+      "plane": "execution",
+      "category": "boundary",
+      "critical": true,
+      "prompt": "Handle duplicate.json, which contains a repeated object key.",
+      "fixture": "cases/duplicate-key-boundary",
+      "expectations": [
+        {"kind": "stdout_equals", "value": "duplicate-key-error\n"}
+      ]
+    }
+  ]
+}
