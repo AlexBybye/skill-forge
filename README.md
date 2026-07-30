@@ -1,10 +1,102 @@
 # Skill Forge
 
-Build the smallest Skill that real task evidence justifies, and say exactly what the evidence does and does not prove.
+English · [中文](README.zh-CN.md)
 
-Skill Forge is a Skill for writing Skills. It gives an agent a workflow (freeze the acceptance cases before the candidate exists), three small scripts (structure check, case runner, scorer), and a report format that separates what was proven from what was merely observed. It stops at a candidate handoff: it does not install, publish, or commit.
+Build the smallest Skill that real task evidence justifies, retain the version that is actually better, and say exactly what the evidence does and does not prove.
+
+> **Skill Forge is a creation and optimization system that prevents false improvement, test accommodation, and overstated claims in Skills.**
+
+It is neither a prompt template for quickly drafting a Skill nor a release gate that only checks the finished package. Skill Forge wraps authoring in an evidence loop: decide whether a Skill is needed, freeze candidate-neutral acceptance cases, preserve the baseline, build and compare the candidate, keep the better version, and bound the final claims.
+
+It stops at a candidate handoff. Installation, publication, commits, and release remain separate, explicitly authorized actions.
 
 Python 3.10+, standard library only. No network calls, no dependencies.
+
+## Why use Skill Forge instead of only a Skill creator?
+
+A creator and Skill Forge answer different questions:
+
+| | Skill creator | Skill Forge |
+|---|---|---|
+| Primary question | How should this Skill be written? | Is a Skill needed, and is this candidate genuinely better? |
+| Starting point | An authoring request | A real task, observed failure, or repeated cost |
+| Evaluation | Usually review the generated Skill | Freeze cases before the candidate, then compare raw outcomes |
+| Baseline | Optional | Immutable for optimization; no-Skill is also a real baseline |
+| Failure outcome | Revise the draft | `keep_baseline`, `no_skill`, `reject_candidate`, or `inconclusive` are valid results |
+| Claim discipline | Describes what was built | Separates proven, disproven, unverified, not run, and unobservable claims |
+
+They are complementary. A creator can be used inside the drafting stage; Skill Forge decides whether that draft deserves to survive. A release gate begins after a candidate exists. Skill Forge starts before implementation and ends before installation or publication.
+
+Its distinctive value is not producing more files. It is preserving the causal chain:
+
+```text
+real task -> frozen acceptance standard -> isolated candidate
+          -> comparable observations -> evidence-bounded decision
+```
+
+## Real-machine result: same Opus 5, different guidance
+
+An earlier Skill Forge version was used to optimize `player-aitest`. The baseline and candidate were generated with the same **Opus 5** model; the controlled difference was whether the model worked through the Skill Forge optimization constraints.
+
+The explicit optimization target was **execution speed**. Accuracy was not added as a parallel target for the model to chase. While pursuing speed, Skill Forge's acceptance and evidence process exposed correctness defects, and the candidate repaired them without being separately instructed to optimize accuracy. The accuracy/stability change below is therefore a discovered secondary gain, not the premise used to define success.
+
+The live run used 29 identical player cases on `www.bilibili.com` with system Chrome 150. Each side ran four rounds (one cold and three hot), with zero skipped cases.
+
+| Observed result | Baseline | Skill Forge candidate | Change |
+|---|---:|---:|---:|
+| Hot-run median wall clock | 337.5 s | 117.4 s | **-220.1 s / -65.2%** |
+| Effective throughput | 0.086 cases/s | 0.247 cases/s | **2.87x** |
+| Passes across 4 rounds | 105 / 116 | 107 / 116 | **+2 passes / +1.7 pp** |
+| Median passes in a hot round | 26 / 29 | 27 / 29 | **+1 case / +3.4 pp** |
+| Skipped cases | 0 | 0 | Same executed case set |
+
+The primary result is the **65.2% execution-time reduction**. The higher pass counts are an additional observed result of the self-initiated repairs made during optimization. Because both sides used Opus 5, the result is evidence that the Skill's constraints improved what the same underlying model produced, rather than evidence that a stronger model was substituted.
+
+The optimization also exposed concrete quality defects instead of merely shortening the run: premature control probes were being recorded as skipped tests, an unplayable-video terminal state could never satisfy `waitPlayerReady`, and the original seek predicate could pass before seeking began.
+
+The claim boundary matters: this run proves the result for these 29 cases and this live environment. It does **not** yet quantify natural-language-to-spec generation time, all 94 automated cases, higher worker counts, automatic routing, or generalization to other Skills. That boundary is part of the result, not a disclaimer added afterward.
+
+### What the run looked like
+
+![Skill Forge freezes the goal and selects reuse, create, optimize, or no-skill before implementation](assets/readme/goal-and-mode-freeze.png)
+
+*Goal and mode freeze: Skill Forge asks for the real task, observed failure, mode, and constraints before discussing implementation.*
+
+![Skill Forge presents core, boundary, failure, and near-negative cases for user review](assets/readme/case-suite-review.png)
+
+*Case review: the run presents core, boundary, failure, and near-negative cases before the candidate is built, then pauses for the user to confirm or amend them.*
+
+## Case study: multi-source weekly-report Skill
+
+Skill Forge was also used to optimize `comprehensive-summary`, a Skill that collects multiple sources and produces a work-week report. This optimization targeted the Skill's **triggering, workflow, and authorization contracts**. It did not modify the underlying collection, upload, or business-integration code.
+
+| Observed result | Before | After | Change |
+|---|---:|---:|---:|
+| Skill Forge structural errors | 1 | 0 | Identity check passed |
+| Frozen-suite full-case passes | 0 / 7 | 2 / 7 | **+28.6 pp** |
+| Expected-field matches | 20 / 58 (34.5%) | 49 / 58 (84.5%) | **+50.0 pp** |
+| Mismatched fields | 38 | 9 | **-76.3%** |
+| `SKILL.md` lines | 155 | 131 | **-15.5%** |
+| `SKILL.md` bytes | 9,997 | 9,060 | **-9.4%** |
+| Active instructions and metadata | 214 lines | 177 lines | **-17.3%** |
+| UI metadata fields | 0 | 3 | Name, description, and default prompt added |
+| Explicitly excluded false-trigger categories | 0 | 3 | Document summary, team summary, and generic calendar |
+| Underlying business files changed | 0 / 20 | 0 / 20 | All 20 remained byte-identical |
+
+The difference between **2/7 full-case passes** and **49/58 field matches** is intentional and important. Full cases use strict JSON equality, so one differently named nested field fails the entire case. The candidate corrected most expected behavior fields, but the remaining nine mismatches show that its output structures are not yet fully standardized.
+
+The optimization made these changes without touching the 20 business implementation and configuration files:
+
+- replaced the invalid `Comprehensive_Summary` identity with the discoverable `comprehensive-summary`;
+- narrowed vague scheduling/task triggers to explicit Qingflow personal scheduling and excluded three adjacent request types;
+- fixed a six-stage workflow: environment check, source collection, OKR extraction, AI matching, human review, and deterministic rendering;
+- defined stable outcomes for invalid week numbers, missing credentials, and external-write states;
+- required “show the exact target -> adjacent confirmation -> execute” for Qingflow create/delete, Zhizhi upload, tracking sync, and hook installation, with re-confirmation when the target changes;
+- resolved commands through `SKILL_ROOT` instead of the current directory;
+- moved Qingflow task types, TAPD subtask constraints, and environment variables into a conditionally loaded configuration reference;
+- removed historical README material and added the three UI metadata fields.
+
+This case proves improved structure, instruction consistency, trigger boundaries, and frozen-case behavior while preserving the underlying implementation bytes. It does **not** prove better collector/API performance, automatic routing, real GitLab/Qingflow/Zhizhi success rates, or production safety.
 
 ## Why it looks like this
 
@@ -123,7 +215,7 @@ An expectation only decides a case when the chosen host can observe it. The suit
 | `stdout_contains`, `stdout_not_contains` | objective | indicative, never decides a case |
 | `stdout_equals`, `exit_code`, `selected_skill` | objective | unobservable, scores `not_run` |
 
-This matters more than it looks. As of the current version, **no live host/policy combination produces positive execution evidence**: `read-only` leaves the model unable to read case inputs, `claude` + `workspace-write` is unimplemented, and routing telemetry does not exist on either host. Artifact expectations under `codex` + `workspace-write` are the intended path.
+This matters more than it looks. In the current built-in generic runner, **no live host/policy combination produces positive execution evidence**: `read-only` leaves the model unable to read case inputs, `claude` + `workspace-write` is unimplemented, and routing telemetry does not exist on either host. Artifact expectations under `codex` + `workspace-write` are the intended path. This runner limitation does not erase separately recorded live experiments such as the `player-aitest` result above.
 
 The fixture host replays frozen responses. It proves the pipeline works and nothing about a live model, which is why its reports carry `fixture_host_only`.
 
@@ -192,7 +284,7 @@ python3 -m unittest discover -s tests -v
 
 Stated plainly, because the reports state them too:
 
-- No live host currently yields positive execution evidence (see the observability table).
+- The built-in generic runner currently yields no positive live-host execution evidence (see the observability table); separately instrumented live experiments remain valid within their recorded scope.
 - Routing and near-negative trigger behavior cannot be tested; those cases stay `not_run`.
 - Digests identify compared bytes and prevent accidental result mixing. They are not signatures and offer nothing against someone with write access to the same filesystem.
 - `check.py` AST findings are planning hints. No findings is not a safety certificate, and non-Python scripts are recorded as unscanned rather than cleared.
