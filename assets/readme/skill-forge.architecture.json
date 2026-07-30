@@ -1,0 +1,315 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Skill Forge Architecture",
+    "subtitle": "以真实任务证据约束 Skill 创建与优化，防止伪提升、测试迎合和过度声明",
+    "output": "skill-forge-architecture.html",
+    "quality_profile": "showcase",
+    "visual_preset": "classic",
+    "viewBox": [1600, 900],
+    "views": [
+      {
+        "id": "frame",
+        "label": "01 决策与框定",
+        "focus": ["evidence", "need-gate", "goal-card"],
+        "note": "先确认是否真的需要 Skill，再冻结目标、证据和边界。"
+      },
+      {
+        "id": "isolate",
+        "label": "02 上下文隔离",
+        "focus": ["requirements", "case-agent", "build-agent"],
+        "note": "验收标准与候选实现隔离，sealed suite 不进入 Build Agent。"
+      },
+      {
+        "id": "verify",
+        "label": "03 质量核心",
+        "focus": ["check", "run", "run-dir", "score"],
+        "note": "Runner 只记录事实，Scorer 才从原始证据派生结论。"
+      },
+      {
+        "id": "decide",
+        "label": "04 决策与交付",
+        "focus": ["decision", "package"],
+        "note": "允许保留 baseline、支持 no-skill 或给出 inconclusive，并限制交付声明。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "evidence",
+      "type": "external",
+      "label": "真实任务证据",
+      "sublabel": "任务 · 失败 · 约束 · 成本",
+      "pos": [90, 150],
+      "size": [190, 72],
+      "tag": "observed / confirmed"
+    },
+    {
+      "id": "need-gate",
+      "type": "security",
+      "label": "Need Gate",
+      "sublabel": "reuse · create · optimize · no_skill",
+      "pos": [90, 300],
+      "size": [190, 72]
+    },
+    {
+      "id": "goal-card",
+      "type": "cloud",
+      "label": "Goal Card",
+      "sublabel": "目标 · 非目标 · 风险 · 可逆性",
+      "pos": [90, 450],
+      "size": [190, 72]
+    },
+    {
+      "id": "requirements",
+      "type": "database",
+      "label": "requirements.md",
+      "sublabel": "只冻结目标、证据与约束",
+      "pos": [450, 150],
+      "size": [210, 72],
+      "tag": "requirements only"
+    },
+    {
+      "id": "case-agent",
+      "type": "backend",
+      "label": "Case Agent",
+      "sublabel": "core · boundary · failure · near_negative",
+      "pos": [450, 300],
+      "size": [210, 72],
+      "tag": "visible + sealed"
+    },
+    {
+      "id": "build-agent",
+      "type": "frontend",
+      "label": "Build Agent",
+      "sublabel": "隔离候选 · baseline 不变",
+      "pos": [450, 450],
+      "size": [210, 72],
+      "tag": "candidate/"
+    },
+    {
+      "id": "check",
+      "type": "cloud",
+      "label": "check.py",
+      "sublabel": "结构、契约与 AST 风险提示",
+      "pos": [810, 150],
+      "size": [180, 72]
+    },
+    {
+      "id": "run",
+      "type": "messagebus",
+      "label": "run.py",
+      "sublabel": "仅记录原始观察",
+      "pos": [1050, 150],
+      "size": [180, 72],
+      "tag": "no winner / passed"
+    },
+    {
+      "id": "score",
+      "type": "backend",
+      "label": "score.py",
+      "sublabel": "从 raw evidence 派生判决",
+      "pos": [1290, 150],
+      "size": [190, 72]
+    },
+    {
+      "id": "run-dir",
+      "type": "database",
+      "label": "Run Directory",
+      "sublabel": "suite snapshot · inputs · raw · results",
+      "pos": [1050, 360],
+      "size": [220, 76],
+      "tag": "immutable + SHA-256"
+    },
+    {
+      "id": "decision",
+      "type": "security",
+      "label": "证据决策",
+      "sublabel": "adopt · keep · no_skill · inconclusive",
+      "pos": [750, 640],
+      "size": [250, 76],
+      "tag": "一次一个因果修改"
+    },
+    {
+      "id": "package",
+      "type": "cloud",
+      "label": "HANDOFF / PACKAGE",
+      "sublabel": "candidate · suite · runs · claim limits",
+      "pos": [1150, 640],
+      "size": [250, 76],
+      "tag": "不自动安装、覆盖或发布"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "01 FRAME · 决策与框定",
+      "wraps": ["evidence", "need-gate", "goal-card"],
+      "pad": 30
+    },
+    {
+      "kind": "security-group",
+      "label": "02 ISOLATE · 防止测试迎合",
+      "wraps": ["requirements", "case-agent", "build-agent"],
+      "pad": 30
+    },
+    {
+      "kind": "region",
+      "label": "03 VERIFY · 事实与判决分离",
+      "wraps": ["check", "run", "score", "run-dir"],
+      "pad": 30
+    },
+    {
+      "kind": "security-group",
+      "label": "04 DECIDE · 因果迭代与有界交付",
+      "wraps": ["decision", "package"],
+      "pad": 30
+    }
+  ],
+  "connections": [
+    {
+      "id": "evidence-to-need",
+      "from": "evidence",
+      "to": "need-gate",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "need-to-goal",
+      "from": "need-gate",
+      "to": "goal-card",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "goal-to-requirements",
+      "from": "goal-card",
+      "to": "requirements",
+      "label": "冻结需求",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[340, 486], [340, 186]],
+      "labelAt": [340, 270]
+    },
+    {
+      "id": "requirements-to-cases",
+      "from": "requirements",
+      "to": "case-agent",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "cases-to-build",
+      "from": "case-agent",
+      "to": "build-agent",
+      "label": "visible suite",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelAt": [627, 386]
+    },
+    {
+      "id": "build-to-check",
+      "from": "build-agent",
+      "to": "check",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[730, 486], [730, 186]]
+    },
+    {
+      "id": "check-to-run",
+      "from": "check",
+      "to": "run",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "run-to-directory",
+      "from": "run",
+      "to": "run-dir",
+      "label": "raw observations",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [[1140, 290], [1160, 290]],
+      "labelAt": [1236, 236]
+    },
+    {
+      "id": "directory-to-score",
+      "from": "run-dir",
+      "to": "score",
+      "label": "raw evidence",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "via": [[1430, 398], [1430, 270], [1385, 270]],
+      "labelAt": [1430, 318]
+    },
+    {
+      "id": "sealed-to-score",
+      "from": "case-agent",
+      "to": "score",
+      "label": "sealed track",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [[710, 336], [710, 96], [1385, 96]],
+      "labelAt": [1050, 96]
+    },
+    {
+      "id": "score-to-decision",
+      "from": "score",
+      "to": "decision",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [[1385, 560], [875, 560]],
+      "labelAt": [1120, 560]
+    },
+    {
+      "id": "decision-to-package",
+      "from": "decision",
+      "to": "package",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "violet",
+      "title": "上下文隔离",
+      "items": [
+        "requirements-only handoff",
+        "sealed suite 不进入 Build Agent"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "同一冻结 suite",
+      "items": [
+        "immutable baseline / isolated candidate",
+        "real no-skill probe"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "声明边界",
+      "items": [
+        "不可观测记为 not_run",
+        "infra_error 不算候选失败"
+      ]
+    }
+  ]
+}

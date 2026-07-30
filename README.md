@@ -36,11 +36,11 @@ real task -> frozen acceptance standard -> isolated candidate
 
 ## Real-machine result: same Opus 5, different guidance
 
-An earlier Skill Forge version was used to optimize `player-aitest`. The baseline and candidate were generated with the same **Opus 5** model; the controlled difference was whether the model worked through the Skill Forge optimization constraints.
+An earlier Skill Forge version was used to optimize a player-regression Skill. The baseline and candidate were generated with the same **Opus 5** model; the controlled difference was whether the model worked through the Skill Forge optimization constraints.
 
 The explicit optimization target was **execution speed**. Accuracy was not added as a parallel target for the model to chase. While pursuing speed, Skill Forge's acceptance and evidence process exposed correctness defects, and the candidate repaired them without being separately instructed to optimize accuracy. The accuracy/stability change below is therefore a discovered secondary gain, not the premise used to define success.
 
-The live run used 29 identical player cases on `www.bilibili.com` with system Chrome 150. Each side ran four rounds (one cold and three hot), with zero skipped cases.
+The live run used 29 identical player cases on a production video site with system Chrome 150. Each side ran four rounds (one cold and three hot), with zero skipped cases.
 
 | Observed result | Baseline | Skill Forge candidate | Change |
 |---|---:|---:|---:|
@@ -50,25 +50,23 @@ The live run used 29 identical player cases on `www.bilibili.com` with system Ch
 | Median passes in a hot round | 26 / 29 | 27 / 29 | **+1 case / +3.4 pp** |
 | Skipped cases | 0 | 0 | Same executed case set |
 
-The primary result is the **65.2% execution-time reduction**. The higher pass counts are an additional observed result of the self-initiated repairs made during optimization. Because both sides used Opus 5, the result is evidence that the Skill's constraints improved what the same underlying model produced, rather than evidence that a stronger model was substituted.
+The run recorded a **65.2% execution-time reduction**, 2.87x throughput, and two additional passes across four rounds. Both sides used Opus 5.
 
-The optimization also exposed concrete quality defects instead of merely shortening the run: premature control probes were being recorded as skipped tests, an unplayable-video terminal state could never satisfy `waitPlayerReady`, and the original seek predicate could pass before seeking began.
+The optimization also repaired premature control probes, unplayable-state handling, and a seek predicate that could pass before seeking began.
 
-The claim boundary matters: this run proves the result for these 29 cases and this live environment. It does **not** yet quantify natural-language-to-spec generation time, all 94 automated cases, higher worker counts, automatic routing, or generalization to other Skills. That boundary is part of the result, not a disclaimer added afterward.
+### Actual run screenshots
 
-### What the run looked like
+![Goal and mode freeze in the live run](assets/readme/goal-and-mode-freeze.png)
 
-![Skill Forge freezes the goal and selects reuse, create, optimize, or no-skill before implementation](assets/readme/goal-and-mode-freeze.png)
+*The run collects the task, observed failure, mode, candidate location, and live-test budget before implementation.*
 
-*Goal and mode freeze: Skill Forge asks for the real task, observed failure, mode, and constraints before discussing implementation.*
+![Frozen case-suite review in the live run](assets/readme/case-suite-review.png)
 
-![Skill Forge presents core, boundary, failure, and near-negative cases for user review](assets/readme/case-suite-review.png)
-
-*Case review: the run presents core, boundary, failure, and near-negative cases before the candidate is built, then pauses for the user to confirm or amend them.*
+*Core, boundary, failure, and near-negative cases are presented for user confirmation before freezing.*
 
 ## Case study: multi-source weekly-report Skill
 
-Skill Forge was also used to optimize `comprehensive-summary`, a Skill that collects multiple sources and produces a work-week report. This optimization targeted the Skill's **triggering, workflow, and authorization contracts**. It did not modify the underlying collection, upload, or business-integration code.
+Skill Forge was also used to optimize a Skill that collects multiple sources and produces a work-week report. This optimization targeted the Skill's **triggering, workflow, and authorization contracts**. It did not modify the underlying collection, upload, or business-integration code.
 
 | Observed result | Before | After | Change |
 |---|---:|---:|---:|
@@ -83,20 +81,68 @@ Skill Forge was also used to optimize `comprehensive-summary`, a Skill that coll
 | Explicitly excluded false-trigger categories | 0 | 3 | Document summary, team summary, and generic calendar |
 | Underlying business files changed | 0 / 20 | 0 / 20 | All 20 remained byte-identical |
 
-The difference between **2/7 full-case passes** and **49/58 field matches** is intentional and important. Full cases use strict JSON equality, so one differently named nested field fails the entire case. The candidate corrected most expected behavior fields, but the remaining nine mismatches show that its output structures are not yet fully standardized.
+Full cases use strict JSON equality, so one differently named nested field fails the entire case. The result was **2/7 full-case passes**, **49/58 field matches**, and nine remaining mismatches.
 
 The optimization made these changes without touching the 20 business implementation and configuration files:
 
-- replaced the invalid `Comprehensive_Summary` identity with the discoverable `comprehensive-summary`;
-- narrowed vague scheduling/task triggers to explicit Qingflow personal scheduling and excluded three adjacent request types;
+- replaced an invalid underscore identity with a discoverable hyphenated identity;
+- narrowed vague scheduling/task triggers to an explicit personal-scheduling scenario and excluded three adjacent request types;
 - fixed a six-stage workflow: environment check, source collection, OKR extraction, AI matching, human review, and deterministic rendering;
 - defined stable outcomes for invalid week numbers, missing credentials, and external-write states;
-- required “show the exact target -> adjacent confirmation -> execute” for Qingflow create/delete, Zhizhi upload, tracking sync, and hook installation, with re-confirmation when the target changes;
+- required “show the exact target -> adjacent confirmation -> execute” for create/delete, upload, tracking sync, and hook installation, with re-confirmation when the target changes;
 - resolved commands through `SKILL_ROOT` instead of the current directory;
-- moved Qingflow task types, TAPD subtask constraints, and environment variables into a conditionally loaded configuration reference;
+- moved task types, subtask constraints, and environment variables into a conditionally loaded configuration reference;
 - removed historical README material and added the three UI metadata fields.
 
-This case proves improved structure, instruction consistency, trigger boundaries, and frozen-case behavior while preserving the underlying implementation bytes. It does **not** prove better collector/API performance, automatic routing, real GitLab/Qingflow/Zhizhi success rates, or production safety.
+The resulting candidate had zero structural errors, 49/58 expected-field matches, nine mismatched fields, three explicit false-trigger exclusions, and no changes to the 20 underlying business files.
+
+## Case study: turning a test-automation manual into a workflow
+
+Skill Forge reworked a long test-automation operation manual containing tutorials, fixed values, duplicated rules, and historical commands into a smaller process-oriented Skill. The candidate keeps all four required scenario/browser combinations.
+
+| Size metric | Baseline | Candidate | Change |
+|---|---:|---:|---:|
+| Runtime files | 5 | 3 | **-40.0%** |
+| Total lines | 643 | 212 | **-67.0%** |
+| Total bytes | 44,192 | 13,211 | **-70.1%** |
+| Main `SKILL.md` | 12,819 B | 8,818 B | **-31.2%** |
+| References | 28,321 B | 4,393 B | **-84.5%** |
+| Scripts | 3,052 B | 0 | **-100%** |
+
+Most of the reduction came from references: three references and 436 lines became two conditionally loaded references and 94 lines. The JavaScript environment-check script was removed.
+
+| Repeated or drifting content | Baseline | Candidate |
+|---|---:|---:|
+| Hard-coded primary case ID | 7 | **0** |
+| Static API interface example | 1 set | **0** |
+| Default spec filename | 9 | 1 |
+| Shared type-declaration rules | 17 | 2 |
+| Chrome rules | 18 | 6 |
+| Firefox rules | 23 | 5 |
+| Test CLI descriptions | 40 | 3 |
+| Fixed `.claude` paths | 2 | **0** |
+
+The candidate replaces these duplicates with one authoritative source per rule:
+
+- determine the primary case from explicit user input, repository configuration, case metadata, or existing specs; stop and ask instead of guessing an ID;
+- read API names, parameters, and return types from the current repository source; stop before browser execution when an API is absent or incompatible;
+- keep the shared type declaration at one fixed repository location and reference it from the case configuration, eliminating move-before-push/move-back-after-push state;
+- use `TRIAGE -> PLAN -> PREPARE -> BUILD/VERIFY -> SYNC`, with user confirmation before build and separate authorization before platform writes;
+- keep host-independent behavior instead of hard-coded Claude/Codex installation paths.
+
+The candidate removed the environment-check script, extensive testing-method tutorials, fixed platform values, historical CLI versions, copy-ready installation commands, and the original translated explanation. Current CLI help replaces duplicated historical commands.
+
+The candidate passed structural checks, removed the generated metadata file, and eliminated the unscanned-script unknown. The formal behavior run recorded seven `not_run` cases and an **`inconclusive`** decision.
+
+### Actual run screenshots
+
+![Target workflow and design choices produced in the live run](assets/readme/fetest-target-structure.png)
+
+*The run presents the target workflow and the decisions that require user selection.*
+
+![Frozen case-suite review and user amendments in the live run](assets/readme/fetest-suite-review.png)
+
+*The proposed cases are reviewed and amended before the baseline and isolated candidate are built.*
 
 ## Why it looks like this
 
@@ -215,7 +261,7 @@ An expectation only decides a case when the chosen host can observe it. The suit
 | `stdout_contains`, `stdout_not_contains` | objective | indicative, never decides a case |
 | `stdout_equals`, `exit_code`, `selected_skill` | objective | unobservable, scores `not_run` |
 
-This matters more than it looks. In the current built-in generic runner, **no live host/policy combination produces positive execution evidence**: `read-only` leaves the model unable to read case inputs, `claude` + `workspace-write` is unimplemented, and routing telemetry does not exist on either host. Artifact expectations under `codex` + `workspace-write` are the intended path. This runner limitation does not erase separately recorded live experiments such as the `player-aitest` result above.
+In the current built-in generic runner, `read-only` cannot produce artifact evidence, one workspace-write host path is not implemented, and routing telemetry is unavailable. Artifact expectations under a supported workspace-write host are the intended path. Separately instrumented live experiments are recorded independently.
 
 The fixture host replays frozen responses. It proves the pipeline works and nothing about a live model, which is why its reports carry `fixture_host_only`.
 
