@@ -157,9 +157,18 @@ Skill Forge 的立场很窄：
 
 ## 安装
 
+作为 skill：
+
 ```bash
 cp -r skill-forge ~/.claude/skills/skill-forge     # Claude Code
 cp -r skill-forge ~/.codex/skills/skill-forge      # Codex
+```
+
+作为 Claude Code 插件，先构建插件树，再放到 marketplace 期望的位置：
+
+```bash
+python3 scripts/package.py build --source . --host plugin \
+  --output <plugins>/skill-forge --manifest <plugins>/skill-forge.manifest.json
 ```
 
 用 `/skill-forge` 或 `$skill-forge` 显式调用。它不会从普通对话里自己选中自己。
@@ -300,14 +309,24 @@ Decision: `keep_baseline`
 
 ## 打包
 
+三种目标：
+
 ```bash
+# skill 根目录，放进 ~/.codex/skills 或 ~/.claude/skills
 python3 scripts/package.py build --source . --host codex \
   --output <dist>/skill-forge --manifest <dist>/skill-forge.manifest.json
+
+# Claude Code 插件，skill 嵌在 skills/skill-forge/ 下
+python3 scripts/package.py build --source . --host plugin \
+  --output <dist>/skill-forge-plugin --manifest <dist>/skill-forge-plugin.manifest.json
+
 python3 scripts/package.py verify --candidate <dist>/skill-forge \
   --manifest <dist>/skill-forge.manifest.json --output <dist>/skill-forge-receipt.json
 ```
 
-发行 `SKILL.md`、`VERSION`、`LICENSE`、`references/`、`scripts/`，Codex 额外带 `agents/`。fixtures、tests 和打包脚本本身都是创作输入，永不发行。
+`codex` 和 `claude` 目标把 `SKILL.md`、`VERSION`、`LICENSE`、`references/`、`scripts/` 放在树根，Codex 额外带 `agents/`。`plugin` 目标把这份载荷移到 `skills/skill-forge/`，并在插件根加上 `.claude-plugin/plugin.json` 和两份 README——这是已安装的 Claude Code 插件的实际布局。
+
+fixtures、tests 和打包脚本本身都是创作输入，永不发行。
 
 receipt 的 `claim_cap` 是 `byte_binding_only`。它证明发行树与 manifest 一致、POSIX 写位已移除。它不是签名，不安装任何东西，也不证明宿主加载了这个 Skill。
 
@@ -316,10 +335,11 @@ receipt 的 `claim_cap` 是 `byte_binding_only`。它证明发行树与 manifest
 ```text
 skill-forge/
 ├── SKILL.md              agent 遵循的工作流
+├── .claude-plugin/       plugin.json，供 plugin 目标使用
 ├── references/           按需加载的细节，只有一层
 ├── scripts/              check、run、score、package
 ├── fixtures/             create / optimize / no-skill 管道 fixture
-└── tests/                覆盖四个脚本的 67 项回归
+└── tests/                覆盖四个脚本的 70 项回归
 ```
 
 ```bash

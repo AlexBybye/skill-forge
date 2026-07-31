@@ -22,7 +22,7 @@ from forge_core import (
 )
 
 
-HOSTS = ("codex", "claude")
+HOSTS = ("codex", "claude", "plugin")
 
 # Runtime payload only. Development fixtures, tests, and repository docs are
 # authoring inputs and never ship.
@@ -31,7 +31,12 @@ HOST_RULES: dict[str, tuple[str, ...]] = {
     # agents/openai.yaml declares the Codex interface; Claude reads frontmatter.
     "codex": SHARED_RULES + ("agents/",),
     "claude": SHARED_RULES,
+    "plugin": SHARED_RULES,
 }
+# A Claude Code plugin discovers skills under skills/<name>/, so the payload is
+# nested and the manifest plus README sit at the plugin root.
+PLUGIN_SKILL_DIR = "skills/skill-forge"
+PLUGIN_ROOT_FILES = (".claude-plugin/plugin.json", "README.md", "README.zh-CN.md")
 EXCLUDED_SCRIPTS = frozenset({"package.py"})
 CACHE_PARTS = frozenset({"__pycache__", ".DS_Store", ".pytest_cache", ".mypy_cache"})
 
@@ -101,19 +106,29 @@ def build(source: Path, host: str, output: Path, manifest_path: Path) -> dict[st
     rules = HOST_RULES[host]
     before = tree_digest(source, reject_unsafe=False)
     selected, ignored = _projection(source, rules)
+    layout: dict[str, str] = {relative: relative for relative in selected}
+    if host == "plugin":
+        layout = {
+            relative: f"{PLUGIN_SKILL_DIR}/{relative}" for relative in selected
+        }
+        for relative in PLUGIN_ROOT_FILES:
+            if not (source / relative).is_file():
+                raise ForgeError(f"plugin payload is missing {relative}")
+            layout[relative] = relative
     output.mkdir(parents=True)
     files: list[dict[str, Any]] = []
     total = 0
-    for relative in selected:
+    for relative in sorted(layout):
         origin = source / relative
-        destination = output / relative
+        destination = output / layout[relative]
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(origin, destination)
         size = destination.stat().st_size
         total += size
         files.append(
             {
-                "path": relative,
+                "path": layout[relative],
+                "source_path": relative,
                 "digest": digest_file(destination),
                 "size": size,
                 "executable": bool(origin.stat().st_mode & stat.S_IXUSR),
@@ -124,7 +139,18 @@ def build(source: Path, host: str, output: Path, manifest_path: Path) -> dict[st
     # Seal before digesting: the tree digest covers file modes, so a manifest
     # written pre-seal would never match the shipped tree.
     _seal_read_only(output)
-    projection = {"rules": list(rules), "ignored_paths": ignored}
+    shipped = {item["path"] for item in files}
+    if host == "plugin":
+        for required in (".claude-plugin/plugin.json", f"{PLUGIN_SKILL_DIR}/SKILL.md"):
+            if required not in shipped:
+                raise ForgeError(f"plugin distribution is missing {required}")
+    elif "SKILL.md" not in shipped:
+        raise ForgeError("distribution is missing SKILL.md at its root")
+    projection = {
+        "rules": list(rules),
+        "layout": "plugin_nested" if host == "plugin" else "skill_root",
+        "ignored_paths": ignored,
+    }
     manifest = {
         "schema_version": 1,
         "object_version": "skill-forge.distribution-manifest/v1",

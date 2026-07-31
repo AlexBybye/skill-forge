@@ -157,9 +157,18 @@ Skill Forge takes a narrow position:
 
 ## Install
 
+As a skill:
+
 ```bash
 cp -r skill-forge ~/.claude/skills/skill-forge     # Claude Code
 cp -r skill-forge ~/.codex/skills/skill-forge      # Codex
+```
+
+As a Claude Code plugin, build the plugin tree and place it where your marketplace expects it:
+
+```bash
+python3 scripts/package.py build --source . --host plugin \
+  --output <plugins>/skill-forge --manifest <plugins>/skill-forge.manifest.json
 ```
 
 Invoke explicitly with `/skill-forge` or `$skill-forge`. It does not self-select from ordinary conversation.
@@ -300,14 +309,24 @@ Sealed results cap claims rather than replacing the decision: agreement proves `
 
 ## Packaging
 
+Three targets:
+
 ```bash
+# skill root, for ~/.codex/skills or ~/.claude/skills
 python3 scripts/package.py build --source . --host codex \
   --output <dist>/skill-forge --manifest <dist>/skill-forge.manifest.json
+
+# Claude Code plugin, with the skill nested under skills/skill-forge/
+python3 scripts/package.py build --source . --host plugin \
+  --output <dist>/skill-forge-plugin --manifest <dist>/skill-forge-plugin.manifest.json
+
 python3 scripts/package.py verify --candidate <dist>/skill-forge \
   --manifest <dist>/skill-forge.manifest.json --output <dist>/skill-forge-receipt.json
 ```
 
-Ships `SKILL.md`, `VERSION`, `LICENSE`, `references/`, `scripts/`, plus `agents/` for Codex. Fixtures, tests, and the packaging script are authoring inputs and never ship.
+The `codex` and `claude` targets ship `SKILL.md`, `VERSION`, `LICENSE`, `references/`, and `scripts/` at the tree root, plus `agents/` for Codex. The `plugin` target moves that payload to `skills/skill-forge/` and adds `.claude-plugin/plugin.json` and both READMEs at the plugin root, which is how installed Claude Code plugins are laid out.
+
+Fixtures, tests, and the packaging script are authoring inputs and never ship.
 
 The receipt is a byte binding with `claim_cap: byte_binding_only`. It proves the tree matches its manifest and that POSIX write bits were removed. It is not a signature, does not install anything, and does not prove a host loaded the Skill.
 
@@ -316,10 +335,11 @@ The receipt is a byte binding with `claim_cap: byte_binding_only`. It proves the
 ```text
 skill-forge/
 ├── SKILL.md              the workflow an agent follows
+├── .claude-plugin/       plugin.json, for the plugin target
 ├── references/           conditional detail, one level deep
 ├── scripts/              check, run, score, package
 ├── fixtures/             create / optimize / no-skill pipeline fixtures
-└── tests/                67 regressions over all four scripts
+└── tests/                70 regressions over all four scripts
 ```
 
 ```bash

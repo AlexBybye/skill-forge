@@ -940,6 +940,43 @@ class PackagingTests(unittest.TestCase):
             package_module.verify(output, manifest)
         self.assertIn("missing files", str(caught.exception))
 
+    def test_plugin_target_nests_the_skill(self) -> None:
+        output, manifest = self._build("plugin")
+        shipped = {
+            entry.path
+            for entry in forge_core.inspect_tree(output, reject_unsafe=True)
+            if entry.kind == "file"
+        }
+        # A Claude Code plugin discovers skills under skills/<name>/.
+        self.assertIn(".claude-plugin/plugin.json", shipped)
+        self.assertIn("skills/skill-forge/SKILL.md", shipped)
+        self.assertIn("skills/skill-forge/scripts/run.py", shipped)
+        self.assertIn("README.md", shipped)
+        self.assertNotIn("SKILL.md", shipped)
+        self.assertNotIn("skills/skill-forge/README.md", shipped)
+        package_module.verify(output, manifest)
+
+    def test_plugin_manifest_declares_the_plugin_layout(self) -> None:
+        _, manifest_path = self._build("plugin")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["source_projection"]["layout"], "plugin_nested")
+        entry = next(
+            item
+            for item in manifest["files"]
+            if item["path"] == "skills/skill-forge/SKILL.md"
+        )
+        self.assertEqual(entry["source_path"], "SKILL.md")
+
+    def test_plugin_manifest_matches_the_declared_version(self) -> None:
+        output, _ = self._build("plugin")
+        declared = json.loads(
+            (output / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        version = (output / "skills" / "skill-forge" / "VERSION").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(declared["version"], version.strip())
+
     def test_build_refuses_an_existing_destination(self) -> None:
         output, manifest = self._build()
         with self.assertRaises(forge_core.ForgeError):
