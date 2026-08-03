@@ -1,16 +1,28 @@
-# Skill Forge
+# Skill Forge — 优化、评估、创建
 
 [English](README.md) · 中文
 
-用真实任务证据支撑起最小的那个 Skill，保住真正更好的版本，并且把证据证明了什么、没证明什么说清楚。
+**用证据优化已有 Skill，检验何时不需要 Skill，只在真实任务确实需要时创建。**
 
-> **Skill Forge 是一个防止 Skill 伪提升、测试迎合和过度声明的创建与优化系统。**
+> **Skill Forge 是面向可复用 AI Agent Skill 的证据驱动系统：优化已有版本、评估是否需要 Skill，并在确有必要时创建小型候选。**
 
-它既不是用来快速起草 Skill 的提示词模板，也不是只在成品阶段检查包体的 release gate。Skill Forge 把创作放进一条证据闭环：先判断是否需要 Skill，冻结不迎合候选的验收用例，保留不可变基线，再构建、比较、保留更好的版本，并限制最终声明的边界。
+Skill Forge 先解决两个代价最高的问题：已有 Skill 能否针对真实失败得到改进，以及选定任务是否根本不需要 Skill。只有证据支持时才构建候选，并明确报告已证明、已否证和未验证的部分。
+
+它既不是用来快速起草 Skill 的提示词模板，也不是只在成品阶段检查包体的 release gate。它把创作放进一条证据闭环：冻结不迎合候选的验收用例，保留不可变基线，再构建、比较、保留更好的结果，并限制最终声明的边界。
 
 它止于候选交接。安装、发布、提交和发行仍是彼此分离、需要单独授权的动作。
 
 Python 3.10+，只用标准库。无网络请求，无第三方依赖。
+
+## Skill Forge 裁决什么
+
+| 模式 | 它保护什么 | 有证据边界的结果 |
+|---|---|---|
+| `optimize` | 不可变 baseline 与一个已观察失败 | 选定用例无关键回归且确有改善才采纳，否则 `keep_baseline` |
+| `no_skill` | 不构建候选的 baseline 探针 | `no_skill_supported_for_selected_cases` 或 `no_skill_not_supported_for_selected_cases` |
+| `create` | 在实现前确认真实需求 | 构建小型候选并交接或拒绝；没有对照就不宣称 gain |
+
+如果已有相邻 Skill 足够，停在上游 `reuse` triage，不要重复创建；`reuse` 不是可执行的 suite 模式。
 
 ## 为什么不只用 skill-creator
 
@@ -157,11 +169,11 @@ Skill Forge 的立场很窄：
 
 ## 安装
 
-作为 skill：
+从经过验证的宿主分发包中取出 `skill-forge/` 目录，作为 Skill 安装：
 
 ```bash
-cp -r skill-forge ~/.claude/skills/skill-forge     # Claude Code
-cp -r skill-forge ~/.codex/skills/skill-forge      # Codex
+cp -R <verified-skill-root> ~/.claude/skills/skill-forge     # Claude Code
+cp -R <verified-skill-root> ~/.codex/skills/skill-forge      # Codex
 ```
 
 作为 Claude Code 插件，先构建插件树，再放到 marketplace 期望的位置：
@@ -183,7 +195,7 @@ NEED -> FRAME -> FREEZE -> DRAFT/STAGE
      -> CAUSAL ITERATION -> HANDOFF
 ```
 
-先选一种模式：`reuse`、`create`、`optimize` 或 `no_skill`。然后在不抄用户实现方案的前提下冻结 goal card，冻结用例集，之后才开始构建。
+先选一种可执行模式：`create`、`optimize` 或 `no_skill`。如果已有相邻 Skill 足够，停在 `reuse` triage，不要重复创建。然后在不抄用户实现方案的前提下冻结 goal card，冻结用例集，之后才开始构建。
 
 完整指令在 [SKILL.md](SKILL.md)。参考文档按需加载：
 

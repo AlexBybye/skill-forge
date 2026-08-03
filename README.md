@@ -1,16 +1,28 @@
-# Skill Forge
+# Skill Forge — Optimize, Evaluate, Create
 
 English · [中文](README.zh-CN.md)
 
-Build the smallest Skill that real task evidence justifies, retain the version that is actually better, and say exactly what the evidence does and does not prove.
+**Optimize what exists. Test whether no Skill is enough. Create only what evidence justifies.**
 
-> **Skill Forge is a creation and optimization system that prevents false improvement, test accommodation, and overstated claims in Skills.**
+> **Skill Forge is an evidence-driven system for creating, optimizing, and stopping work on reusable AI agent Skills.**
 
-It is neither a prompt template for quickly drafting a Skill nor a release gate that only checks the finished package. Skill Forge wraps authoring in an evidence loop: decide whether a Skill is needed, freeze candidate-neutral acceptance cases, preserve the baseline, build and compare the candidate, keep the better version, and bound the final claims.
+Skill Forge starts with the two expensive decisions that ordinary creators often skip: can an existing Skill be improved against a real failure, and does the selected task set need a Skill at all? When a Skill is justified, it builds a small candidate, compares it against the right baseline, and reports exactly what the evidence proves, disproves, or leaves unverified.
+
+It is neither a prompt template for quickly drafting a Skill nor a release gate that only checks the finished package. It wraps authoring in an evidence loop: freeze candidate-neutral acceptance cases, preserve the baseline, build and compare the candidate, keep the better outcome, and bound the final claims.
 
 It stops at a candidate handoff. Installation, publication, commits, and release remain separate, explicitly authorized actions.
 
 Python 3.10+, standard library only. No network calls, no dependencies.
+
+## What Skill Forge decides
+
+| Mode | What it protects | Evidence-bounded outcome |
+|---|---|---|
+| `optimize` | An immutable baseline and one observed failure | Adopt a candidate only when it improves the selected cases without a critical regression; otherwise `keep_baseline` |
+| `no_skill` | A candidate-free baseline probe | `no_skill_supported_for_selected_cases` or `no_skill_not_supported_for_selected_cases` |
+| `create` | A real need before implementation | Build a small candidate and hand it off or reject it; do not claim gain without a comparison |
+
+If an adjacent Skill is already adequate, stop at the upstream `reuse` triage outcome instead of creating a duplicate. `reuse` is not an executable suite mode.
 
 ## Why use Skill Forge instead of only a Skill creator?
 
@@ -157,11 +169,11 @@ Skill Forge takes a narrow position:
 
 ## Install
 
-As a skill:
+From a verified host distribution, copy the contained `skill-forge/` directory as a Skill:
 
 ```bash
-cp -r skill-forge ~/.claude/skills/skill-forge     # Claude Code
-cp -r skill-forge ~/.codex/skills/skill-forge      # Codex
+cp -R <verified-skill-root> ~/.claude/skills/skill-forge     # Claude Code
+cp -R <verified-skill-root> ~/.codex/skills/skill-forge      # Codex
 ```
 
 As a Claude Code plugin, build the plugin tree and place it where your marketplace expects it:
@@ -183,7 +195,7 @@ NEED -> FRAME -> FREEZE -> DRAFT/STAGE
      -> CAUSAL ITERATION -> HANDOFF
 ```
 
-Pick one mode: `reuse`, `create`, `optimize`, or `no_skill`. Then freeze a goal card without copying the user's proposed implementation, freeze the suite, and only then build.
+Choose one executable mode: `create`, `optimize`, or `no_skill`. If an adjacent Skill is already adequate, stop at `reuse` triage and do not create a duplicate. Then freeze a goal card without copying the user's proposed implementation, freeze the suite, and only then build.
 
 Full instructions are in [SKILL.md](SKILL.md). The references are loaded conditionally:
 

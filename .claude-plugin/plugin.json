@@ -1,6 +1,6 @@
 {
   "name": "skill-forge",
-  "description": "写 Skill 的 Skill — 候选出现前先冻结验收用例，用独立上下文的两个 agent 分别写用例和写候选，跑用例后给出证据分级报告（已证明/已推翻/未验证/未运行）。支持 create / optimize / no_skill 三种模式与密封 holdout 用例。命中关键词：写 skill / 优化 skill / skill 质量 / skill 测试 / 该不该做 skill。",
+  "description": "Evidence-driven Skill optimization and no-skill evaluation for Codex and Claude, with small-scope creation when real task evidence justifies it. Freeze candidate-neutral cases, compare immutable baselines, and report proven, disproven, unverified, and not-run claims.",
   "version": "4.0.2",
   "author": {
     "name": "yuboyu",
@@ -9,6 +9,9 @@
   "keywords": [
     "skill",
     "skill-authoring",
+    "skill-optimization",
+    "no-skill",
+    "baseline",
     "evaluation",
     "evidence",
     "testing",

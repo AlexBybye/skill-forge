@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  regressions-and-distributions:
+    name: Test and package Skill Forge
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Build and verify host distributions
+        shell: bash
+        env:
+          FORGE_DIST: ${{ runner.temp }}/skill-forge-dist
+        run: |
+          set -euo pipefail
+          for host in codex claude plugin; do
+            python3 scripts/package.py build \
+              --source . \
+              --host "$host" \
+              --output "$FORGE_DIST/$host/skill-forge" \
+              --manifest "$FORGE_DIST/$host/skill-forge.manifest.json"
+            python3 scripts/package.py verify \
+              --candidate "$FORGE_DIST/$host/skill-forge" \
+              --manifest "$FORGE_DIST/$host/skill-forge.manifest.json" \
+              --output "$FORGE_DIST/$host/skill-forge-receipt.json"
+          done
+          tar -C "$FORGE_DIST" -czf \
+            "${RUNNER_TEMP}/skill-forge-distributions.tar.gz" .
+
+      - name: Upload verified distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-forge-distributions
+          path: ${{ runner.temp }}/skill-forge-distributions.tar.gz
+          if-no-files-found: error
+          retention-days: 14

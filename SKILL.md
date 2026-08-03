@@ -1,6 +1,6 @@
 ---
 name: skill-forge
-description: Create, audit, or improve reusable Codex and Claude Skills through content admission, candidate-neutral task suites, immutable baselines, raw observations, and bounded evidence claims. Use when explicitly invoked with $skill-forge to decide whether a Skill is needed, create a small Skill, optimize an existing Skill, or test whether no Skill is sufficient.
+description: Optimize existing Codex and Claude Skills against immutable baselines, test whether no Skill is sufficient, or create a small Skill only when real task evidence justifies it. Use when explicitly invoked with $skill-forge for candidate-neutral suites, raw observations, bounded evidence claims, and keep-baseline or no-skill outcomes.
 ---
 
 # Skill Forge
@@ -19,12 +19,13 @@ NEED -> FRAME -> FREEZE -> DRAFT/STAGE
 
 ### 1. Decide need and mode
 
-Choose exactly one mode:
+Choose exactly one executable mode:
 
-- `reuse`: use an adequate adjacent Skill; do not create a duplicate.
 - `create`: create a candidate without claiming gain unless a real no-Skill comparison exists.
 - `optimize`: preserve an immutable baseline and improve one observed failure.
 - `no_skill`: create no candidate and run a candidate-free baseline probe.
+
+If an adjacent Skill is already adequate, record `reuse` as an upstream triage outcome and do not enter an executable suite mode or create a duplicate.
 
 Read [references/authoring.md](references/authoring.md) before drafting or modifying a Skill.
 
