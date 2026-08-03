@@ -1,7 +1,7 @@
 {
   "name": "skill-forge",
   "description": "Evidence-driven Skill optimization and no-skill evaluation for Codex and Claude, with small-scope creation when real task evidence justifies it. Freeze candidate-neutral cases, compare immutable baselines, and report proven, disproven, unverified, and not-run claims.",
-  "version": "4.0.2",
+  "version": "0.1.0",
   "author": {
     "name": "yuboyu",
     "email": "yuboyu@bilibili.com"

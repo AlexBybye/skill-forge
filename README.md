@@ -14,6 +14,8 @@ It stops at a candidate handoff. Installation, publication, commits, and release
 
 Python 3.10+, standard library only. No network calls, no dependencies.
 
+`VERSION` is the standalone project version source. The extracted baseline starts a new independent version line at `0.1.0`; only a clean, verified, tagged commit is a release.
+
 ## What Skill Forge decides
 
 | Mode | What it protects | Evidence-bounded outcome |
