@@ -158,6 +158,10 @@ The candidate passed structural checks, removed the generated metadata file, and
 
 *The proposed cases are reviewed and amended before the baseline and isolated candidate are built.*
 
+<img width="1186" height="788" alt="image" src="https://github.com/user-attachments/assets/24baf75f-0dfe-4329-86ea-dbb75fe1aefa" />
+
+*How the no-skill activate*
+
 ## Why it looks like this
 
 Most Skill-authoring tooling fails in one of two ways. It either generates prose with no way to tell whether the result is better than nothing, or it grows a compliance layer so large that nobody completes a run.
