@@ -78,6 +78,10 @@ creator 和 Skill Forge 回答的不是同一个问题：
 
 *冻结前逐条展示核心、边界、失败和近负例，等待用户确认。*
 
+<img width="1186" height="788" alt="image" src="https://github.com/user-attachments/assets/24baf75f-0dfe-4329-86ea-dbb75fe1aefa" />
+
+*到底要不要这条skill的激活画面*
+
 ## 实测案例：多源汇总工作周报 Skill
 
 Skill Forge 还被用于优化一个多源采集并生成工作周报的 Skill。这次主要修改的是 Skill 的**触发、流程和授权契约**，没有修改底层采集、上传或业务集成代码。
